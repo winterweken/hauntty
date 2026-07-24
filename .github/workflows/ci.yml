@@ -16,7 +16,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned so a newer stable clippy can't fail CI on newly-added lints
+      # without a deliberate bump. Keep in sync with rust-version in Cargo.toml.
+      - uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2

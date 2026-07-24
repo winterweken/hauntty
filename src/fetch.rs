@@ -51,7 +51,7 @@ pub fn list_remote_themes() -> Result<Vec<RemoteTheme>> {
             }
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|r| r.name.to_lowercase());
     Ok(out)
 }
 
