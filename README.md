@@ -96,6 +96,20 @@ cargo test                   # unit + round-trip + apply + TUI smoke tests
 The config round-trip is covered by a test that parses and re-renders **every** Ghostty
 theme file installed on your machine and asserts byte-for-byte equality.
 
+## Releasing
+
+Cutting a release is one command ([`scripts/release.sh`](scripts/release.sh)):
+
+```sh
+scripts/release.sh 0.1.1     # or: patch | minor | major
+```
+
+It verifies a clean, green, up-to-date `main`, bumps the version in `Cargo.toml` and the
+Homebrew formula, commits and pushes the `vX.Y.Z` tag, waits for the release workflow to
+build the platform binaries, writes their real checksums back into `dist/hauntty.rb`, and
+syncs the formula into the [Homebrew tap](https://github.com/winterweken/homebrew-tap).
+Requires `gh` (authenticated). Override the tap with `TAP_REPO=owner/name`.
+
 ## License
 
 MIT © winterweken
