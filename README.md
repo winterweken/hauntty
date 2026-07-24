@@ -35,6 +35,14 @@ brew install winterweken/tap/hauntty
 
 ### Cargo
 
+From the repo (works today, no registry needed):
+
+```sh
+cargo install --git https://github.com/winterweken/hauntty --locked
+```
+
+Once published to crates.io:
+
 ```sh
 cargo install hauntty
 ```
