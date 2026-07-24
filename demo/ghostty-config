@@ -1,0 +1,45 @@
+# Sample Ghostty config used for the hauntty demo recording.
+# It sets colors inline (no `theme =` line), so applying a theme in the demo
+# shows hauntty backing the current look up as a saved theme first.
+term = xterm-256color
+font-family             = "JetBrains Mono"
+font-size               = 16
+
+# ── Dracula Pink palette ──
+background           = 282a36
+foreground           = f8f8f2
+cursor-color         = ff4fbf
+cursor-text          = 282a36
+selection-background = ff4fbf
+selection-foreground = 282a36
+palette = 0=#21222c
+palette = 1=#ff5555
+palette = 2=#50fa7b
+palette = 3=#f1fa8c
+palette = 4=#ff79c6
+palette = 5=#ff92df
+palette = 6=#8be9fd
+palette = 7=#f8f8f2
+palette = 8=#6272a4
+palette = 9=#ff6e6e
+palette = 10=#69ff94
+palette = 11=#ffffa5
+palette = 12=#ff92df
+palette = 13=#ffb8e6
+palette = 14=#a4ffff
+palette = 15=#ffffff
+
+# ── Window ──
+window-padding-x  = 16
+window-padding-y  = 14
+window-width      = 130
+window-height     = 38
+
+# ── Cursor / QoL ──
+cursor-style          = block
+cursor-style-blink    = true
+copy-on-select        = clipboard
+confirm-close-surface = false
+
+# ── Splits ──
+keybind = cmd+d=new_split:right

@@ -1,0 +1,41 @@
+[package]
+name = "hauntty"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "A TUI theme and settings manager for the Ghostty terminal"
+license = "MIT"
+repository = "https://github.com/winterweken/hauntty"
+readme = "README.md"
+keywords = ["ghostty", "terminal", "theme", "tui"]
+categories = ["command-line-utilities"]
+
+[features]
+default = ["import-iterm", "online"]
+import-iterm = ["dep:plist"]
+online = ["dep:ureq", "dep:serde_json"]
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+anyhow = "1"
+thiserror = "2"
+nucleo-matcher = "0.3"
+dirs = "5"
+plist = { version = "1", optional = true }
+ureq = { version = "2", optional = true, default-features = false, features = ["tls"] }
+serde_json = { version = "1", optional = true }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[lib]
+name = "hauntty"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hauntty"
+path = "src/main.rs"
