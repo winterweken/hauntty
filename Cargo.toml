@@ -9,6 +9,8 @@ repository = "https://github.com/winterweken/hauntty"
 readme = "README.md"
 keywords = ["ghostty", "terminal", "theme", "tui"]
 categories = ["command-line-utilities"]
+# Dev-only files that don't belong in the published crate (keeps it lean).
+exclude = ["demo/", ".github/", "dist/", "scripts/", "install.sh"]
 
 [features]
 default = ["import-iterm", "online"]

@@ -8,7 +8,7 @@ writes your Ghostty config *surgically*: it only touches the lines it manages an
 leaves your comments, formatting, and everything else byte-for-byte intact, with an
 automatic timestamped backup on every write.
 
-![hauntty demo](demo/hauntty.gif)
+![hauntty demo](https://raw.githubusercontent.com/winterweken/hauntty/main/demo/hauntty.gif)
 
 ## Features
 
