@@ -60,6 +60,20 @@ Sleep 1s
 Type "s"
 Sleep 1.8s
 
+# Back to Themes, then fetch more themes from the upstream catalog.
+# The GitHub request runs on a background thread — the UI stays responsive
+# and a spinner animates while the list loads.
+Tab
+Sleep 800ms
+Type "f"
+Sleep 3.5s
+Type "gruvbox"
+Sleep 1.6s
+Enter
+Sleep 2.6s
+Escape
+Sleep 800ms
+
 # Help overlay.
 Type "?"
 Sleep 2.2s
