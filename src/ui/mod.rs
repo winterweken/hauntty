@@ -415,11 +415,38 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
 
 #[cfg(feature = "online")]
 fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
-    let Some(fetch) = &app.fetch else { return };
     let rect = center(area, 60, 22);
     f.render_widget(Clear, rect);
-    let inner = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(rect);
 
+    // Still loading the list: show a spinner instead of an empty box.
+    let Some(fetch) = &app.fetch else {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(
+                    "   {}  fetching theme list from GitHub…",
+                    app.spinner_frame()
+                ),
+                Style::default().fg(ACCENT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled("   esc to cancel", Style::default().fg(MUTED))),
+        ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(ACCENT))
+                .title(" fetch themes "),
+        );
+        f.render_widget(p, rect);
+        return;
+    };
+
+    let title = if app.fetching {
+        format!(" fetch themes  {} downloading… ", app.spinner_frame())
+    } else {
+        format!(" fetch themes ({}) ", fetch.filtered.len())
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(" filter: ", Style::default().fg(ACCENT)),
@@ -430,7 +457,7 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ACCENT))
-                .title(" fetch themes "),
+                .title(title),
         ),
         rect,
     );
@@ -454,7 +481,6 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
         width: rect.width.saturating_sub(2),
         height: rect.height.saturating_sub(3),
     };
-    let _ = inner;
     let mut state = ListState::default();
     if !fetch.filtered.is_empty() {
         state.select(Some(fetch.selected));

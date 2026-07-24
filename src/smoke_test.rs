@@ -72,6 +72,22 @@ fn renders_and_handles_input_without_panicking() {
     handle_key(&mut app, key(KeyCode::Char('?')));
     assert_eq!(app.mode, Mode::Help);
     terminal.draw(|f| ui::render(f, &app)).unwrap();
+    handle_key(&mut app, key(KeyCode::Esc));
+
+    // Fetch loading overlay renders its spinner (no real network needed).
+    #[cfg(feature = "online")]
+    {
+        app.mode = Mode::Fetch;
+        app.fetching = true;
+        app.fetch = None;
+        let before = app.spinner;
+        app.tick();
+        assert_ne!(app.spinner, before, "tick should advance the spinner");
+        let _ = app.spinner_frame();
+        terminal.draw(|f| ui::render(f, &app)).unwrap();
+        app.cancel_overlay();
+        assert!(!app.fetching, "cancel should stop the fetching state");
+    }
 
     let _ = std::fs::remove_dir_all(&dir);
 }

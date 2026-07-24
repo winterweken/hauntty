@@ -10,6 +10,9 @@ use hauntty::paths::Paths;
 use hauntty::settings::{SettingSpec, Widget};
 use hauntty::theme::{Theme, ThemeSet};
 
+#[cfg(feature = "online")]
+use std::sync::mpsc::{Receiver, TryRecvError};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Themes,
@@ -74,6 +77,14 @@ pub struct FetchState {
     pub selected: usize,
 }
 
+/// A result delivered from a background network thread. Errors are carried as
+/// strings so the message is `Send` regardless of the underlying error type.
+#[cfg(feature = "online")]
+enum FetchMsg {
+    List(std::result::Result<Vec<hauntty::fetch::RemoteTheme>, String>),
+    Download(std::result::Result<String, String>),
+}
+
 pub struct App {
     pub paths: Paths,
     pub config: ConfigDocument,
@@ -103,6 +114,16 @@ pub struct App {
     pub input: Option<InputState>,
     #[cfg(feature = "online")]
     pub fetch: Option<FetchState>,
+    /// Receiver for the in-flight background network request, if any.
+    #[cfg(feature = "online")]
+    fetch_rx: Option<Receiver<FetchMsg>>,
+    /// True while a network request is running (drives the spinner + guards
+    /// against launching a second one).
+    #[cfg(feature = "online")]
+    pub fetching: bool,
+    /// Spinner animation tick.
+    #[cfg(feature = "online")]
+    pub spinner: usize,
 
     matcher: Matcher,
 }
@@ -144,6 +165,12 @@ impl App {
             input: None,
             #[cfg(feature = "online")]
             fetch: None,
+            #[cfg(feature = "online")]
+            fetch_rx: None,
+            #[cfg(feature = "online")]
+            fetching: false,
+            #[cfg(feature = "online")]
+            spinner: 0,
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.recompute_filter();
@@ -273,8 +300,76 @@ impl App {
         #[cfg(feature = "online")]
         {
             self.fetch = None;
+            // Abandon any in-flight request; its result will be dropped.
+            self.fetch_rx = None;
+            self.fetching = false;
         }
         self.mode = Mode::Normal;
+    }
+
+    /// Advance the spinner animation (called once per UI tick).
+    pub fn tick(&mut self) {
+        #[cfg(feature = "online")]
+        if self.fetching {
+            self.spinner = self.spinner.wrapping_add(1);
+        }
+    }
+
+    /// Drain any completed background network result and apply it.
+    #[cfg(feature = "online")]
+    pub fn poll_background(&mut self) {
+        let msg = match &self.fetch_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.fetch_rx = None;
+                    self.fetching = false;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.fetch_rx = None;
+        self.fetching = false;
+        match msg {
+            FetchMsg::List(Ok(remotes)) => {
+                // If the user closed the overlay while it loaded, drop the result.
+                if self.mode != Mode::Fetch {
+                    return;
+                }
+                let filtered = (0..remotes.len()).collect();
+                self.fetch = Some(FetchState {
+                    remotes,
+                    filter: String::new(),
+                    filtered,
+                    selected: 0,
+                });
+            }
+            FetchMsg::List(Err(e)) => {
+                self.mode = Mode::Normal;
+                self.fetch = None;
+                self.toast(ToastKind::Error, format!("Fetch failed: {e}"));
+            }
+            FetchMsg::Download(Ok(name)) => {
+                self.reload_themes();
+                self.toast(ToastKind::Success, format!("Downloaded '{name}'."));
+            }
+            FetchMsg::Download(Err(e)) => {
+                self.toast(ToastKind::Error, format!("Download failed: {e}"));
+            }
+        }
+    }
+
+    /// No-op when the online feature is disabled.
+    #[cfg(not(feature = "online"))]
+    pub fn poll_background(&mut self) {}
+
+    /// The current spinner glyph.
+    #[cfg(feature = "online")]
+    pub fn spinner_frame(&self) -> char {
+        const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        FRAMES[self.spinner % FRAMES.len()]
     }
 
     // ---- settings ------------------------------------------------------
@@ -409,21 +504,21 @@ impl App {
 
     #[cfg(feature = "online")]
     pub fn start_fetch(&mut self) {
-        self.toast(ToastKind::Info, "Fetching theme list from GitHub…");
-        match hauntty::fetch::list_remote_themes() {
-            Ok(remotes) => {
-                let filtered = (0..remotes.len()).collect();
-                self.fetch = Some(FetchState {
-                    remotes,
-                    filter: String::new(),
-                    filtered,
-                    selected: 0,
-                });
-                self.mode = Mode::Fetch;
-                self.toast = None;
-            }
-            Err(e) => self.toast(ToastKind::Error, format!("Fetch failed: {e:#}")),
+        if self.fetching {
+            return;
         }
+        self.mode = Mode::Fetch;
+        self.fetch = None;
+        self.fetching = true;
+        self.spinner = 0;
+        self.toast = None;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fetch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = hauntty::fetch::list_remote_themes().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(FetchMsg::List(res));
+        });
     }
 
     #[cfg(feature = "online")]
@@ -456,18 +551,26 @@ impl App {
 
     #[cfg(feature = "online")]
     pub fn fetch_download_selected(&mut self) {
+        if self.fetching {
+            return;
+        }
         let Some(f) = &self.fetch else { return };
         let Some(&idx) = f.filtered.get(f.selected) else {
             return;
         };
         let remote = f.remotes[idx].clone();
-        match hauntty::fetch::download_theme(&remote, &self.paths.user_theme_dir) {
-            Ok(_) => {
-                self.reload_themes();
-                self.toast(ToastKind::Success, format!("Downloaded '{}'.", remote.name));
-            }
-            Err(e) => self.toast(ToastKind::Error, format!("Download failed: {e:#}")),
-        }
+        let dir = self.paths.user_theme_dir.clone();
+        self.fetching = true;
+        self.spinner = 0;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fetch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = hauntty::fetch::download_theme(&remote, &dir)
+                .map(|_| remote.name.clone())
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(FetchMsg::Download(res));
+        });
     }
 }
 

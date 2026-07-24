@@ -124,13 +124,17 @@ fn restore_terminal(terminal: &mut Tui) -> Result<()> {
 fn run_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
     while !app.should_quit {
         terminal.draw(|f| ui::render(f, app))?;
-        if crossterm::event::poll(Duration::from_millis(250))? {
+        // A short poll keeps the spinner animating and surfaces background
+        // network results promptly, without busy-waiting.
+        if crossterm::event::poll(Duration::from_millis(120))? {
             if let Event::Key(key) = crossterm::event::read()? {
                 if key.kind == KeyEventKind::Press {
                     event::handle_key(app, key);
                 }
             }
         }
+        app.poll_background();
+        app.tick();
     }
     Ok(())
 }
