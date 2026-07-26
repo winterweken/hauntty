@@ -57,7 +57,8 @@ pub struct ConfirmState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputPurpose {
-    FontFamily,
+    /// Edit a Ghostty setting by its config key.
+    Setting(String),
     #[cfg(feature = "import-iterm")]
     ImportPath,
 }
@@ -429,7 +430,7 @@ impl App {
             self.input = Some(InputState {
                 title: format!("{} — type a value, Enter to set", spec.label),
                 buffer: cur,
-                purpose: InputPurpose::FontFamily,
+                purpose: InputPurpose::Setting(spec.key.to_string()),
             });
             self.mode = Mode::Input;
         } else {
@@ -543,15 +544,11 @@ impl App {
         };
         self.mode = Mode::Normal;
         match input.purpose {
-            InputPurpose::FontFamily => {
-                let spec = self
-                    .settings
-                    .iter()
-                    .find(|s| s.key == "font-family")
-                    .cloned();
+            InputPurpose::Setting(key) => {
+                let spec = self.settings.iter().find(|s| s.key == key).cloned();
                 if let Some(spec) = spec {
                     let formatted = spec.format_for_config(&input.buffer);
-                    self.set_setting("font-family", &formatted);
+                    self.set_setting(&key, &formatted);
                 }
             }
             #[cfg(feature = "import-iterm")]

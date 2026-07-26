@@ -22,12 +22,9 @@ pub struct StarshipStatus {
 
 impl StarshipStatus {
     pub fn detect() -> Self {
-        let config_dir = dirs::config_dir().unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".config")
-        });
-        let config_path = config_dir.join("starship.toml");
+        // Starship always uses $STARSHIP_CONFIG or $XDG_CONFIG_HOME/starship.toml,
+        // falling back to ~/.config/starship.toml — NOT ~/Library/Application Support.
+        let config_path = starship_config_path();
         let config_exists = config_path.exists();
 
         let bin_path = which_starship();
@@ -57,6 +54,22 @@ impl StarshipStatus {
             config_exists,
         }
     }
+}
+
+/// Resolve the Starship config path, respecting $STARSHIP_CONFIG and
+/// $XDG_CONFIG_HOME, and always falling back to `~/.config/starship.toml`.
+fn starship_config_path() -> PathBuf {
+    if let Ok(p) = std::env::var("STARSHIP_CONFIG") {
+        return PathBuf::from(p);
+    }
+    let xdg = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".config")
+        });
+    xdg.join("starship.toml")
 }
 
 fn which_starship() -> Option<PathBuf> {
@@ -274,7 +287,13 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let bpath = config_path.with_file_name(format!("starship.toml.bak.{ts}"));
+        let mut bpath = config_path.with_file_name(format!("starship.toml.bak.{ts}"));
+        // Avoid overwriting an earlier backup made in the same second.
+        let mut suffix = 1u32;
+        while bpath.exists() {
+            bpath = config_path.with_file_name(format!("starship.toml.bak.{ts}.{suffix}"));
+            suffix += 1;
+        }
         fs::copy(config_path, &bpath)
             .with_context(|| format!("backing up starship.toml to {}", bpath.display()))?;
         Some(bpath)
@@ -282,8 +301,14 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
         None
     };
 
-    fs::write(config_path, preset.toml_content)
-        .with_context(|| format!("writing starship preset to {}", config_path.display()))?;
+    // Atomic write: write to a temp file and rename, so a partial write
+    // cannot leave the config empty/truncated.
+    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp_path = parent.join(".starship.toml.hauntty.tmp");
+    fs::write(&tmp_path, preset.toml_content)
+        .with_context(|| format!("writing temp starship preset to {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, config_path)
+        .with_context(|| format!("renaming temp file to {}", config_path.display()))?;
 
     Ok(StarshipApplyOutcome {
         backup_path,
@@ -298,23 +323,58 @@ pub fn install_starship() -> Result<String> {
 
     match brew {
         Ok(out) if out.status.success() => {
-            Ok("Starship successfully installed via Homebrew!".to_string())
+            // Verify it actually landed on PATH
+            if which_starship().is_some() {
+                Ok("Starship successfully installed via Homebrew!".to_string())
+            } else {
+                anyhow::bail!("Homebrew reported success but `starship` not found on PATH.");
+            }
         }
         _ => {
-            // Fallback to official installer script
-            let script = Command::new("sh")
-                .args([
-                    "-c",
-                    "curl -fsSL https://starship.rs/install.sh | sh -s -- -y",
-                ])
+            // Fallback: download the install script separately so we can
+            // detect network/curl failures before piping into sh.
+            let dl = Command::new("curl")
+                .args(["-fsSL", "https://starship.rs/install.sh"])
                 .output()
-                .context("executing starship install script")?;
+                .context("downloading starship install script")?;
 
-            if script.status.success() {
+            if !dl.status.success() || dl.stdout.is_empty() {
+                let err = String::from_utf8_lossy(&dl.stderr);
+                anyhow::bail!("Failed to download install script: {}", err.trim());
+            }
+
+            let script = Command::new("sh")
+                .args(["-s", "--", "-y"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .context("spawning install script")?;
+
+            use std::io::Write;
+            let mut child = script;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(&dl.stdout)
+                    .context("piping install script")?;
+            }
+            let out = child
+                .wait_with_output()
+                .context("waiting for install script")?;
+
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                anyhow::bail!("Installation failed: {}", err.trim());
+            }
+
+            // Final verification
+            if which_starship().is_some() {
                 Ok("Starship successfully installed via starship.rs script!".to_string())
             } else {
-                let err = String::from_utf8_lossy(&script.stderr);
-                anyhow::bail!("Installation failed: {}", err.trim());
+                anyhow::bail!(
+                    "Install script completed but `starship` not found on PATH. \
+                     You may need to restart your shell."
+                );
             }
         }
     }
