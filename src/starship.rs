@@ -302,13 +302,15 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
     };
 
     // Atomic write: write to a temp file and rename, so a partial write
-    // cannot leave the config empty/truncated.
-    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+    // cannot leave the config empty/truncated. Resolve symlinks first so
+    // dotfile-managed configs are written through the link, not replaced.
+    let real_config = fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+    let parent = real_config.parent().unwrap_or_else(|| Path::new("."));
     let tmp_path = parent.join(".starship.toml.hauntty.tmp");
     fs::write(&tmp_path, preset.toml_content)
         .with_context(|| format!("writing temp starship preset to {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, config_path)
-        .with_context(|| format!("renaming temp file to {}", config_path.display()))?;
+    fs::rename(&tmp_path, &real_config)
+        .with_context(|| format!("renaming temp file to {}", real_config.display()))?;
 
     Ok(StarshipApplyOutcome {
         backup_path,
