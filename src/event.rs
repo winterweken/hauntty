@@ -49,11 +49,32 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             }
             return;
         }
-        KeyCode::Tab | KeyCode::BackTab => {
+        KeyCode::Tab => {
             app.tab = match app.tab {
                 Tab::Themes => Tab::Settings,
-                Tab::Settings => Tab::Themes,
+                Tab::Settings => Tab::Starship,
+                Tab::Starship => Tab::Themes,
             };
+            return;
+        }
+        KeyCode::BackTab => {
+            app.tab = match app.tab {
+                Tab::Themes => Tab::Starship,
+                Tab::Settings => Tab::Themes,
+                Tab::Starship => Tab::Settings,
+            };
+            return;
+        }
+        KeyCode::Char('1') => {
+            app.tab = Tab::Themes;
+            return;
+        }
+        KeyCode::Char('2') => {
+            app.tab = Tab::Settings;
+            return;
+        }
+        KeyCode::Char('3') => {
+            app.tab = Tab::Starship;
             return;
         }
         KeyCode::Char('?') => {
@@ -88,6 +109,18 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             KeyCode::Char('s') => app.save_settings(),
             _ => {}
         },
+        Tab::Starship => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => app.move_starship(-1),
+            KeyCode::Down | KeyCode::Char('j') => app.move_starship(1),
+            KeyCode::PageUp => app.move_starship(-5),
+            KeyCode::PageDown => app.move_starship(5),
+            KeyCode::Home => app.move_starship(-(i32::MAX)),
+            KeyCode::End => app.move_starship(i32::MAX),
+            KeyCode::Char('/') => app.mode = Mode::Filter,
+            KeyCode::Enter => app.apply_starship_preset(),
+            KeyCode::Char('i') => app.install_starship(),
+            _ => {}
+        },
     }
 }
 
@@ -95,14 +128,36 @@ fn handle_filter(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc | KeyCode::Enter => app.mode = Mode::Normal,
         KeyCode::Backspace => {
-            app.filter.pop();
-            app.recompute_filter();
+            if app.tab == Tab::Starship {
+                app.starship_filter.pop();
+                app.recompute_starship_filter();
+            } else {
+                app.filter.pop();
+                app.recompute_filter();
+            }
         }
-        KeyCode::Up => app.move_theme(-1),
-        KeyCode::Down => app.move_theme(1),
+        KeyCode::Up => {
+            if app.tab == Tab::Starship {
+                app.move_starship(-1);
+            } else {
+                app.move_theme(-1);
+            }
+        }
+        KeyCode::Down => {
+            if app.tab == Tab::Starship {
+                app.move_starship(1);
+            } else {
+                app.move_theme(1);
+            }
+        }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.filter.push(c);
-            app.recompute_filter();
+            if app.tab == Tab::Starship {
+                app.starship_filter.push(c);
+                app.recompute_starship_filter();
+            } else {
+                app.filter.push(c);
+                app.recompute_filter();
+            }
         }
         _ => {}
     }

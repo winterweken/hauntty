@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 pub enum Tab {
     Themes,
     Settings,
+    Starship,
 }
 
 /// The current interaction mode (drives which overlay/handler is active).
@@ -108,6 +109,13 @@ pub struct App {
     pub setting_selected: usize,
     pub dirty: bool,
 
+    // Starship tab
+    pub starship_status: hauntty::starship::StarshipStatus,
+    pub starship_presets: Vec<hauntty::starship::StarshipPreset>,
+    pub starship_selected: usize,
+    pub starship_filter: String,
+    pub starship_filtered: Vec<usize>,
+
     // Overlays
     pub toast: Option<Toast>,
     pub confirm: Option<ConfirmState>,
@@ -160,6 +168,12 @@ impl App {
             theme_selected: 0,
             setting_selected: 0,
             dirty: false,
+            starship_status: hauntty::starship::StarshipStatus::detect(),
+
+            starship_presets: hauntty::starship::official_presets(),
+            starship_selected: 0,
+            starship_filter: String::new(),
+            starship_filtered: Vec::new(),
             toast: None,
             confirm: None,
             input: None,
@@ -174,6 +188,7 @@ impl App {
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.recompute_filter();
+        app.recompute_starship_filter();
         Ok(app)
     }
 
@@ -443,6 +458,79 @@ impl App {
                 );
             }
             Err(e) => self.toast(ToastKind::Error, format!("Save failed: {e:#}")),
+        }
+    }
+
+    // ---- starship prompt -----------------------------------------------
+
+    pub fn recompute_starship_filter(&mut self) {
+        if self.starship_filter.is_empty() {
+            self.starship_filtered = (0..self.starship_presets.len()).collect();
+        } else {
+            let q = self.starship_filter.to_lowercase();
+            self.starship_filtered = self
+                .starship_presets
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect();
+        }
+        if self.starship_selected >= self.starship_filtered.len() {
+            self.starship_selected = self.starship_filtered.len().saturating_sub(1);
+        }
+    }
+
+    pub fn current_starship_preset(&self) -> Option<&hauntty::starship::StarshipPreset> {
+        self.starship_filtered
+            .get(self.starship_selected)
+            .and_then(|&i| self.starship_presets.get(i))
+    }
+
+    pub fn move_starship(&mut self, delta: i32) {
+        if self.starship_filtered.is_empty() {
+            return;
+        }
+        let len = self.starship_filtered.len() as i32;
+        let next = (self.starship_selected as i32 + delta).clamp(0, len - 1);
+        self.starship_selected = next as usize;
+    }
+
+    pub fn apply_starship_preset(&mut self) {
+        let Some(preset) = self.current_starship_preset().cloned() else {
+            return;
+        };
+        let config_path = self.starship_status.config_path.clone();
+        match hauntty::starship::apply_preset(&preset, &config_path) {
+            Ok(outcome) => {
+                self.starship_status.config_exists = true;
+                let mut msg = format!(
+                    "Applied Starship preset '{}' to {}",
+                    preset.name,
+                    outcome.config_path.display()
+                );
+                if let Some(bk) = outcome.backup_path {
+                    msg = format!(
+                        "Backed up to {}. {msg}",
+                        bk.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                }
+                self.toast(ToastKind::Success, msg);
+            }
+            Err(e) => self.toast(ToastKind::Error, format!("Failed to apply preset: {e:#}")),
+        }
+    }
+
+    pub fn install_starship(&mut self) {
+        self.toast(ToastKind::Info, "Installing Starship...");
+        match hauntty::starship::install_starship() {
+            Ok(msg) => {
+                self.starship_status = hauntty::starship::StarshipStatus::detect();
+                self.toast(ToastKind::Success, msg);
+            }
+            Err(e) => self.toast(ToastKind::Error, format!("Installation failed: {e:#}")),
         }
     }
 

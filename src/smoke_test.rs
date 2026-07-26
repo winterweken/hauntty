@@ -54,9 +54,15 @@ fn renders_and_handles_input_without_panicking() {
     assert!(app.dirty);
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
-    // Back to themes, enter filter mode and type.
+    // Move to Starship tab, then back to Themes tab.
     handle_key(&mut app, key(KeyCode::Tab));
+    assert_eq!(app.tab, Tab::Starship);
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+
+    handle_key(&mut app, key(KeyCode::Tab));
+    assert_eq!(app.tab, Tab::Themes);
     handle_key(&mut app, key(KeyCode::Char('/')));
+
     assert_eq!(app.mode, Mode::Filter);
     handle_key(&mut app, key(KeyCode::Char('d')));
     terminal.draw(|f| ui::render(f, &app)).unwrap();
