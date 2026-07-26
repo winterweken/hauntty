@@ -16,7 +16,7 @@
 #   7. Pulls the real checksums, writes them into the formula, and commits.
 #   8. Syncs the formula into the Homebrew tap repo.
 #
-# Requirements: git, gh (authenticated), cargo (with a crates.io token), perl.
+# Requirements: git, gh (authenticated), cargo (authenticated to crates.io), perl.
 # Env overrides:
 #   REMOTE     git remote name for this repo   (default: origin)
 #   TAP_REPO   owner/name of the Homebrew tap  (default: winterweken/homebrew-tap)
@@ -38,11 +38,10 @@ command -v cargo>/dev/null || die "cargo is required"
 command -v perl >/dev/null || die "perl is required"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated (run: gh auth login)"
 
-# `cargo publish` needs a crates.io token.
-cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-[ -n "${CARGO_REGISTRY_TOKEN:-}" ] \
-  || grep -qs '^token' "$cargo_home/credentials.toml" "$cargo_home/credentials" \
-  || die "no crates.io token configured (run: cargo login, or set CARGO_REGISTRY_TOKEN)"
+# `cargo publish` needs crates.io credentials; let cargo resolve them
+# (CARGO_REGISTRY_TOKEN, credentials.toml, or a credential provider).
+cargo owner --list --registry crates-io hauntty >/dev/null \
+  || die "crates.io credential check failed (run: cargo login, or set CARGO_REGISTRY_TOKEN)"
 
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "release from the 'main' branch"
 git diff --quiet && git diff --cached --quiet || die "working tree is dirty; commit or stash first"
@@ -90,7 +89,7 @@ cargo test --all-features
 # --- crates.io pre-flight ---------------------------------------------------
 step "Checking the crate packages cleanly (cargo publish --dry-run)"
 # --allow-dirty: the version bump above is intentionally not committed yet.
-cargo publish --dry-run --allow-dirty
+cargo publish --dry-run --allow-dirty --registry crates-io
 
 # --- commit + tag + push ----------------------------------------------------
 step "Committing and tagging $TAG"
@@ -102,7 +101,7 @@ git push -q "$REMOTE" "$TAG"
 
 # --- publish to crates.io ---------------------------------------------------
 step "Publishing hauntty $VERSION to crates.io"
-if publish_out="$(cargo publish 2>&1)"; then
+if publish_out="$(cargo publish --registry crates-io 2>&1)"; then
   echo "published to crates.io"
 elif grep -q "already uploaded" <<<"$publish_out"; then
   echo "crates.io already has $VERSION — skipping"
