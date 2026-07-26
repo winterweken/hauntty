@@ -29,6 +29,7 @@ pub fn render(f: &mut Frame, app: &App) {
     match app.tab {
         Tab::Themes => render_themes(f, chunks[1], app),
         Tab::Settings => render_settings(f, chunks[1], app),
+        Tab::Starship => render_starship(f, chunks[1], app),
     }
     render_help_bar(f, chunks[2], app);
 
@@ -63,10 +64,15 @@ fn render_tabs(f: &mut Frame, area: Rect, app: &App) {
         cols[0],
     );
 
-    let titles = vec![Line::from("  Themes  "), Line::from("  Settings  ")];
+    let titles = vec![
+        Line::from("  Themes  "),
+        Line::from("  Settings  "),
+        Line::from("  Starship  "),
+    ];
     let selected = match app.tab {
         Tab::Themes => 0,
         Tab::Settings => 1,
+        Tab::Starship => 2,
     };
     let tabs = Tabs::new(titles)
         .select(selected)
@@ -253,6 +259,7 @@ fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
         ],
         (Tab::Themes, _) => THEME_KEYS,
         (Tab::Settings, _) => SETTINGS_KEYS,
+        (Tab::Starship, _) => STARSHIP_KEYS,
     };
     let mut spans = Vec::new();
     for (k, label) in keys {
@@ -266,6 +273,166 @@ fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
         ));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_starship(f: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::vertical([Constraint::Length(4), Constraint::Min(0)]).split(area);
+
+    let status = &app.starship_status;
+    let status_span = if status.installed {
+        let ver = status.version.as_deref().unwrap_or("installed");
+        Span::styled(
+            format!("✓ {ver}"),
+            Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)).bold(),
+        )
+    } else {
+        Span::styled(
+            "✗ Not Installed (press i to install)",
+            Style::default().fg(Color::Rgb(0xf7, 0x76, 0x8e)).bold(),
+        )
+    };
+
+    let cfg_str = status.config_path.display().to_string();
+    let banner_text = vec![
+        Line::from(vec![
+            Span::styled(" Status: ", Style::default().fg(MUTED)),
+            status_span,
+            Span::styled("  │  Config: ", Style::default().fg(MUTED)),
+            Span::raw(cfg_str),
+        ]),
+        Line::from(vec![
+            Span::styled(" Docs: ", Style::default().fg(MUTED)),
+            Span::styled(
+                hauntty::starship::STARSHIP_WEBSITE,
+                Style::default().fg(ACCENT),
+            ),
+            Span::styled("  │  Presets Catalog: ", Style::default().fg(MUTED)),
+            Span::styled(
+                hauntty::starship::STARSHIP_PRESETS_URL,
+                Style::default().fg(ACCENT),
+            ),
+        ]),
+    ];
+
+    let banner = Paragraph::new(banner_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(MUTED))
+            .title(" Starship Prompt Status & Links "),
+    );
+    f.render_widget(banner, chunks[0]);
+
+    let cols = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(chunks[1]);
+
+    let left = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(cols[0]);
+    let filter_line = if app.mode == Mode::Filter || !app.starship_filter.is_empty() {
+        Line::from(vec![
+            Span::styled(" / ", Style::default().fg(ACCENT)),
+            Span::raw(app.starship_filter.clone()),
+            if app.mode == Mode::Filter {
+                Span::styled("▏", Style::default().fg(ACCENT))
+            } else {
+                Span::raw("")
+            },
+        ])
+    } else {
+        Line::from(Span::styled(
+            " press / to filter presets",
+            Style::default().fg(MUTED),
+        ))
+    };
+    f.render_widget(Paragraph::new(filter_line), left[0]);
+
+    let items: Vec<ListItem> = app
+        .starship_filtered
+        .iter()
+        .filter_map(|&i| app.starship_presets.get(i))
+        .map(|p| {
+            ListItem::new(Line::from(vec![Span::styled(
+                format!("{:<24}", truncate(p.name, 24)),
+                Style::default().bold(),
+            )]))
+        })
+        .collect();
+
+    let count = format!(" presets ({}) ", app.starship_filtered.len());
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(MUTED))
+                .title(count),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(0x2a, 0x2b, 0x3c))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+    let mut state = ListState::default();
+    if !app.starship_filtered.is_empty() {
+        state.select(Some(app.starship_selected));
+    }
+    f.render_stateful_widget(list, left[1], &mut state);
+
+    match app.current_starship_preset() {
+        Some(preset) => {
+            let right_rows = Layout::vertical([
+                Constraint::Length(4),
+                Constraint::Length(4),
+                Constraint::Min(0),
+            ])
+            .split(cols[1]);
+
+            let overview = Paragraph::new(vec![
+                Line::from(Span::styled(
+                    preset.name,
+                    Style::default().fg(ACCENT).bold(),
+                )),
+                Line::from(Span::styled(preset.description, Style::default().fg(MUTED))),
+            ])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(MUTED))
+                    .title(" Preset Description "),
+            )
+            .wrap(Wrap { trim: true });
+            f.render_widget(overview, right_rows[0]);
+
+            let preview_p = Paragraph::new(vec![Line::from(Span::styled(
+                preset.preview,
+                Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)).bold(),
+            ))])
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(ACCENT))
+                    .title(" Prompt Preview "),
+            );
+            f.render_widget(preview_p, right_rows[1]);
+
+            let toml_p = Paragraph::new(preset.toml_content)
+                .style(Style::default().fg(Color::Rgb(0xc0, 0xca, 0xf5)))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(MUTED))
+                        .title(" TOML Config (~/.config/starship.toml) "),
+                )
+                .wrap(Wrap { trim: false });
+            f.render_widget(toml_p, right_rows[2]);
+        }
+        None => {
+            let p = Paragraph::new("No Starship presets match your filter.").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(MUTED)),
+            );
+            f.render_widget(p, cols[1]);
+        }
+    }
 }
 
 #[cfg(feature = "online")]
@@ -295,6 +462,15 @@ const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("←→", "change"),
     ("↵", "edit/toggle"),
     ("s", "save"),
+    ("tab", "starship"),
+    ("q", "quit"),
+];
+
+const STARSHIP_KEYS: &[(&str, &str)] = &[
+    ("↑↓", "move"),
+    ("/", "filter"),
+    ("↵", "apply preset"),
+    ("i", "install"),
     ("tab", "themes"),
     ("q", "quit"),
 ];
@@ -380,15 +556,17 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(ACCENT).bold(),
         )),
         Line::from(""),
-        Line::from("Themes tab:  ↑↓ move · / filter · Enter apply · i import .itermcolors"),
+        Line::from("Themes tab:   ↑↓ move · / filter · Enter apply · i import .itermcolors"),
         Line::from("Settings tab: ↑↓ move · ←→ change · Enter edit/toggle · s save"),
-        Line::from("Tab switches panes · q quits · applying edits ~/.config/ghostty/config"),
+        Line::from("Starship tab: ↑↓ move · / filter · Enter apply preset · i install"),
+        Line::from("Tab / 1-3 switches panes · q quits"),
         Line::from(""),
         Line::from(Span::styled(
-            "After applying, reload Ghostty with ⌘⇧, (cmd+shift+,)",
+            "After applying Ghostty settings, reload with ⌘⇧, (cmd+shift+,)",
             Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)),
         )),
     ];
+
     if !app.warnings.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(

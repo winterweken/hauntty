@@ -221,6 +221,27 @@ pub fn registry() -> Vec<SettingSpec> {
             },
             default: "10000000",
         },
+        SettingSpec {
+            key: "command",
+            label: "Custom command",
+            help: "Override default shell executable or startup command.",
+            widget: Text,
+            default: "(default shell)",
+        },
+        SettingSpec {
+            key: "shell-integration",
+            label: "Shell integration",
+            help: "Ghostty shell integration (detect, none, zsh, bash, fish).",
+            widget: Select(&["detect", "none", "zsh", "bash", "fish"]),
+            default: "detect",
+        },
+        SettingSpec {
+            key: "shell-integration-features",
+            label: "Shell integration features",
+            help: "Features enabled (comma-separated: cursor, sudo, title, etc.).",
+            widget: Text,
+            default: "cursor,sudo,title",
+        },
     ]
 }
 

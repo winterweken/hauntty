@@ -8,6 +8,7 @@ pub mod apply;
 pub mod config;
 pub mod paths;
 pub mod settings;
+pub mod starship;
 pub mod theme;
 
 #[cfg(feature = "import-iterm")]
