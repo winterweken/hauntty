@@ -1,1 +1,11 @@
 /target
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor & IDE files
+*.swp
+*~
+.vscode/
+.idea/
