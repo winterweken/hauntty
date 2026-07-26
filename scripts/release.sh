@@ -9,12 +9,14 @@
 # What it does:
 #   1. Verifies a clean, green, up-to-date checkout.
 #   2. Bumps the version in Cargo.toml (+ Cargo.lock) and dist/hauntty.rb.
-#   3. Commits, tags vX.Y.Z, and pushes — triggering the release workflow.
-#   4. Waits for the workflow to build and publish the platform binaries.
-#   5. Pulls the real checksums, writes them into the formula, and commits.
-#   6. Syncs the formula into the Homebrew tap repo.
+#   3. Runs a `cargo publish` dry-run as a crates.io pre-flight.
+#   4. Commits, tags vX.Y.Z, and pushes — triggering the release workflow.
+#   5. Publishes the crate to crates.io (skips if already published).
+#   6. Waits for the workflow to build and publish the platform binaries.
+#   7. Pulls the real checksums, writes them into the formula, and commits.
+#   8. Syncs the formula into the Homebrew tap repo.
 #
-# Requirements: git, gh (authenticated), cargo, perl.
+# Requirements: git, gh (authenticated), cargo (with a crates.io token), perl.
 # Env overrides:
 #   REMOTE     git remote name for this repo   (default: origin)
 #   TAP_REPO   owner/name of the Homebrew tap  (default: winterweken/homebrew-tap)
@@ -35,6 +37,12 @@ command -v gh   >/dev/null || die "gh (GitHub CLI) is required"
 command -v cargo>/dev/null || die "cargo is required"
 command -v perl >/dev/null || die "perl is required"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated (run: gh auth login)"
+
+# `cargo publish` needs a crates.io token.
+cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+[ -n "${CARGO_REGISTRY_TOKEN:-}" ] \
+  || grep -qs '^token' "$cargo_home/credentials.toml" "$cargo_home/credentials" \
+  || die "no crates.io token configured (run: cargo login, or set CARGO_REGISTRY_TOKEN)"
 
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || die "release from the 'main' branch"
 git diff --quiet && git diff --cached --quiet || die "working tree is dirty; commit or stash first"
@@ -79,6 +87,11 @@ cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 
+# --- crates.io pre-flight ---------------------------------------------------
+step "Checking the crate packages cleanly (cargo publish --dry-run)"
+# --allow-dirty: the version bump above is intentionally not committed yet.
+cargo publish --dry-run --allow-dirty
+
 # --- commit + tag + push ----------------------------------------------------
 step "Committing and tagging $TAG"
 git add Cargo.toml Cargo.lock dist/hauntty.rb
@@ -86,6 +99,17 @@ git diff --staged --quiet || git commit -q -m "Release $TAG"
 git tag -a "$TAG" -m "hauntty $TAG"
 git push -q "$REMOTE" main
 git push -q "$REMOTE" "$TAG"
+
+# --- publish to crates.io ---------------------------------------------------
+step "Publishing hauntty $VERSION to crates.io"
+if publish_out="$(cargo publish 2>&1)"; then
+  echo "published to crates.io"
+elif grep -q "already uploaded" <<<"$publish_out"; then
+  echo "crates.io already has $VERSION — skipping"
+else
+  printf '%s\n' "$publish_out" >&2
+  die "cargo publish failed"
+fi
 
 # --- wait for the release workflow -----------------------------------------
 step "Waiting for the release workflow to build $TAG"
