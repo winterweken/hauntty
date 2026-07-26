@@ -82,7 +82,7 @@ cargo test --all-features
 # --- commit + tag + push ----------------------------------------------------
 step "Committing and tagging $TAG"
 git add Cargo.toml Cargo.lock dist/hauntty.rb
-git commit -q -m "Release $TAG"
+git diff --staged --quiet || git commit -q -m "Release $TAG"
 git tag -a "$TAG" -m "hauntty $TAG"
 git push -q "$REMOTE" main
 git push -q "$REMOTE" "$TAG"
