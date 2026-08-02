@@ -24,7 +24,10 @@ pub struct RemoteTheme {
 /// List the Ghostty themes available upstream. Uses the unauthenticated GitHub
 /// API (rate-limited to ~60 requests/hour per IP).
 pub fn list_remote_themes() -> Result<Vec<RemoteTheme>> {
-    let body = ureq::get(CONTENTS_API)
+    let body = ureq::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .get(CONTENTS_API)
         .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .call()
@@ -57,14 +60,23 @@ pub fn list_remote_themes() -> Result<Vec<RemoteTheme>> {
 
 /// Download one remote theme into `dest_dir` and return the written path.
 pub fn download_theme(remote: &RemoteTheme, dest_dir: &Path) -> Result<PathBuf> {
-    let body = ureq::get(&remote.download_url)
+    let body = ureq::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .get(&remote.download_url)
         .set("User-Agent", USER_AGENT)
         .call()
         .with_context(|| format!("downloading {}", remote.name))?
         .into_string()
         .context("reading theme body")?;
 
-    let dest = dest_dir.join(&remote.name);
+    // Sanitize remote filename to prevent path traversal.
+    let safe_name = Path::new(&remote.name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("invalid remote theme filename: '{}'", remote.name))?;
+    let dest = dest_dir.join(safe_name);
     let theme = Theme::from_str(&remote.name, ThemeSource::User, dest.clone(), &body);
     if !theme.is_renderable() {
         return Err(anyhow!(

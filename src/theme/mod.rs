@@ -224,12 +224,22 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
             (Some(_), None) => return Ordering::Greater,
             (Some(ca), Some(cb)) => {
                 if ca.is_ascii_digit() && cb.is_ascii_digit() {
-                    let na: String = take_digits(&mut ai);
-                    let nb: String = take_digits(&mut bi);
-                    let va = na.trim_start_matches('0');
-                    let vb = nb.trim_start_matches('0');
-                    match va.len().cmp(&vb.len()).then_with(|| va.cmp(vb)) {
-                        Ordering::Equal => continue,
+                    // Compare digit runs without heap allocation.
+                    let a_zeros = skip_char(&mut ai, '0');
+                    let b_zeros = skip_char(&mut bi, '0');
+                    let (a_len, cmp) = compare_digit_runs(&mut ai, &mut bi);
+                    let b_len = a_len; // compare_digit_runs advances both equally until one ends
+                    let _ = b_len;
+                    match cmp {
+                        Ordering::Equal => {
+                            // Same numeric value — break tie by number of
+                            // leading zeros (fewer zeros = sorts first), giving
+                            // a total order so "Theme 01" != "Theme 1".
+                            match a_zeros.cmp(&b_zeros) {
+                                Ordering::Equal => continue,
+                                ord => return ord,
+                            }
+                        }
                         ord => return ord,
                     }
                 } else {
@@ -248,17 +258,54 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-fn take_digits(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
-    let mut s = String::new();
-    while let Some(c) = it.peek().copied() {
-        if c.is_ascii_digit() {
-            s.push(c);
-            it.next();
-        } else {
-            break;
+/// Count and skip leading instances of `ch`, returning how many were skipped.
+fn skip_char(it: &mut std::iter::Peekable<std::str::Chars>, ch: char) -> usize {
+    let mut n = 0;
+    while it.peek() == Some(&ch) {
+        it.next();
+        n += 1;
+    }
+    n
+}
+
+/// Compare two digit runs character-by-character (no allocation). Returns the
+/// number of significant digits consumed from `a` and the ordering. Both
+/// iterators are advanced past the digit run.
+fn compare_digit_runs(
+    a: &mut std::iter::Peekable<std::str::Chars>,
+    b: &mut std::iter::Peekable<std::str::Chars>,
+) -> (usize, std::cmp::Ordering) {
+    use std::cmp::Ordering;
+    let mut len = 0usize;
+    let mut first_diff = Ordering::Equal;
+    loop {
+        let ad = a.peek().is_some_and(|c| c.is_ascii_digit());
+        let bd = b.peek().is_some_and(|c| c.is_ascii_digit());
+        match (ad, bd) {
+            (true, true) => {
+                let ca = a.next().unwrap();
+                let cb = b.next().unwrap();
+                len += 1;
+                if first_diff == Ordering::Equal {
+                    first_diff = ca.cmp(&cb);
+                }
+            }
+            (true, false) => {
+                // a has more digits → a is numerically larger.
+                while a.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    a.next();
+                }
+                return (len, Ordering::Greater);
+            }
+            (false, true) => {
+                while b.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    b.next();
+                }
+                return (len, Ordering::Less);
+            }
+            (false, false) => return (len, first_diff),
         }
     }
-    s
 }
 
 #[cfg(test)]

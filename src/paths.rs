@@ -26,6 +26,7 @@ impl Paths {
 
         let config_dir = config
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(ghostty_config_dir);
 

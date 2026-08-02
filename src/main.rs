@@ -100,6 +100,14 @@ fn main() -> Result<()> {
 }
 
 fn run(app: &mut App) -> Result<()> {
+    // Install panic hook to guarantee terminal restoration on panic.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, crossterm::cursor::Show);
+        original_hook(panic_info);
+    }));
+
     let mut terminal = setup_terminal().context("setting up terminal")?;
     let result = run_loop(&mut terminal, app);
     restore_terminal(&mut terminal).context("restoring terminal")?;
@@ -134,6 +142,7 @@ fn run_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
             }
         }
         app.poll_background();
+        app.poll_starship_install();
         app.tick();
     }
     Ok(())

@@ -76,12 +76,25 @@ fn which_starship() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join("starship");
-            if candidate.is_file() {
+            if candidate.is_file() && is_executable(&candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+#[cfg(unix)]
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> bool {
+    true // Windows doesn't use permission bits; .is_file() is sufficient.
 }
 
 /// An official or curated Starship prompt preset (theme).
@@ -306,11 +319,20 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
     // dotfile-managed configs are written through the link, not replaced.
     let real_config = fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
     let parent = real_config.parent().unwrap_or_else(|| Path::new("."));
-    let tmp_path = parent.join(".starship.toml.hauntty.tmp");
+    let tmp_path = parent.join(format!(
+        ".starship.toml.hauntty.tmp.{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     fs::write(&tmp_path, preset.toml_content)
         .with_context(|| format!("writing temp starship preset to {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, &real_config)
-        .with_context(|| format!("renaming temp file to {}", real_config.display()))?;
+    if let Err(e) = fs::rename(&tmp_path, &real_config) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e).with_context(|| format!("renaming temp file to {}", real_config.display()));
+    }
 
     Ok(StarshipApplyOutcome {
         backup_path,

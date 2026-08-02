@@ -15,20 +15,29 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+/// RAII guard that removes a directory on drop, even during panic unwind.
+struct TempDir(std::path::PathBuf);
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn renders_and_handles_input_without_panicking() {
-    let dir = std::env::temp_dir().join(format!("hauntty-smoke-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let path = std::env::temp_dir().join(format!("hauntty-smoke-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    let dir = TempDir(path);
 
-    let cfg = dir.join("config");
+    let cfg = dir.0.join("config");
     std::fs::write(
         &cfg,
         "font-size = 16\nbackground = 282a36\npalette = 0=#21222c\n",
     )
     .unwrap();
 
-    let themes = dir.join("bundled");
+    let themes = dir.0.join("bundled");
     std::fs::create_dir_all(&themes).unwrap();
     std::fs::write(
         themes.join("Dracula"),
@@ -94,6 +103,4 @@ fn renders_and_handles_input_without_panicking() {
         app.cancel_overlay();
         assert!(!app.fetching, "cancel should stop the fetching state");
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }

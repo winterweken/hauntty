@@ -150,7 +150,7 @@ fn handle_filter(app: &mut App, key: KeyEvent) {
                 app.move_theme(1);
             }
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(c) if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => {
             if app.tab == Tab::Starship {
                 app.starship_filter.push(c);
                 app.recompute_starship_filter();
@@ -176,7 +176,7 @@ fn handle_confirm(app: &mut App, key: KeyEvent) {
                 KeyCode::Backspace => {
                     c.backup_name.pop();
                 }
-                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char(ch) if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => {
                     c.backup_name.push(ch);
                 }
                 _ => {}
@@ -205,7 +205,7 @@ fn handle_input(app: &mut App, key: KeyEvent) {
                 i.buffer.pop();
             }
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(c) if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => {
             if let Some(i) = &mut app.input {
                 i.buffer.push(c);
             }
@@ -227,7 +227,7 @@ fn handle_fetch(app: &mut App, key: KeyEvent) {
             }
             app.fetch_filter_changed();
         }
-        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(c) if key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => {
             if let Some(f) = &mut app.fetch {
                 f.filter.push(c);
             }

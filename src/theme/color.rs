@@ -17,6 +17,11 @@ impl Rgb {
     /// 6-digit forms (`#abc`, `abc`, `#aabbcc`, `aabbcc`), case-insensitive.
     pub fn parse_hex(s: &str) -> Option<Rgb> {
         let h = s.trim().strip_prefix('#').unwrap_or(s.trim());
+        // Guard: hex digits are always ASCII, so reject non-ASCII early to
+        // avoid panics from byte-index slicing on multi-byte characters.
+        if !h.is_ascii() {
+            return None;
+        }
         match h.len() {
             3 => {
                 let r = u8::from_str_radix(&h[0..1], 16).ok()?;
@@ -24,10 +29,24 @@ impl Rgb {
                 let b = u8::from_str_radix(&h[2..3], 16).ok()?;
                 Some(Rgb::new(r * 17, g * 17, b * 17))
             }
+            4 => {
+                let r = u8::from_str_radix(&h[0..1], 16).ok()?;
+                let g = u8::from_str_radix(&h[1..2], 16).ok()?;
+                let b = u8::from_str_radix(&h[2..3], 16).ok()?;
+                let _a = u8::from_str_radix(&h[3..4], 16).ok()?;
+                Some(Rgb::new(r * 17, g * 17, b * 17))
+            }
             6 => {
                 let r = u8::from_str_radix(&h[0..2], 16).ok()?;
                 let g = u8::from_str_radix(&h[2..4], 16).ok()?;
                 let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+                Some(Rgb::new(r, g, b))
+            }
+            8 => {
+                let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+                let _a = u8::from_str_radix(&h[6..8], 16).ok()?;
                 Some(Rgb::new(r, g, b))
             }
             _ => None,
@@ -98,5 +117,21 @@ mod tests {
     fn contrast_text_picks_readable() {
         assert_eq!(Rgb::new(255, 255, 255).contrast_text(), Rgb::new(0, 0, 0));
         assert_eq!(Rgb::new(0, 0, 0).contrast_text(), Rgb::new(255, 255, 255));
+    }
+
+    #[test]
+    fn parses_four_and_eight_digit() {
+        assert_eq!(Rgb::parse_hex("#abca"), Some(Rgb::new(0xaa, 0xbb, 0xcc)));
+        assert_eq!(
+            Rgb::parse_hex("#282a36ff"),
+            Some(Rgb::new(0x28, 0x2a, 0x36))
+        );
+    }
+
+    #[test]
+    fn non_ascii_returns_none_instead_of_panic() {
+        // Multi-byte UTF-8 whose byte length is 3 (like '€') must not panic.
+        assert_eq!(Rgb::parse_hex("€"), None);
+        assert_eq!(Rgb::parse_hex("#€€"), None);
     }
 }
