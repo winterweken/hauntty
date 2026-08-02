@@ -79,9 +79,10 @@ printf 'Releasing \033[1m%s\033[0m -> \033[1m%s\033[0m\n' "$current" "$VERSION"
 step "Bumping version to $VERSION"
 perl -pi -e "s/^version = \"\d+\.\d+\.\d+\"/version = \"$VERSION\"/" Cargo.toml
 perl -pi -e "s/^(\s*)version \"\d+\.\d+\.\d+\"/\${1}version \"$VERSION\"/" dist/hauntty.rb
+cargo update --workspace --quiet
 
 # --- verify green -----------------------------------------------------------
-step "Verifying (fmt, clippy, test) — also refreshes Cargo.lock"
+step "Verifying (fmt, clippy, test)"
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
