@@ -12,6 +12,9 @@ use hauntty::theme::{Theme, ThemeSet};
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+#[cfg(feature = "online")]
+use hauntty::fetch::{self, RemoteStarshipPreset, RemoteTheme};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Themes,
@@ -71,8 +74,17 @@ pub struct InputState {
 }
 
 #[cfg(feature = "online")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchTarget {
+    Themes,
+    Starship,
+}
+
+#[cfg(feature = "online")]
 pub struct FetchState {
-    pub remotes: Vec<hauntty::fetch::RemoteTheme>,
+    pub target: FetchTarget,
+    pub remotes: Vec<RemoteTheme>,
+    pub starship_remotes: Vec<RemoteStarshipPreset>,
     pub filter: String,
     pub filtered: Vec<usize>,
     pub selected: usize,
@@ -82,8 +94,10 @@ pub struct FetchState {
 /// strings so the message is `Send` regardless of the underlying error type.
 #[cfg(feature = "online")]
 enum FetchMsg {
-    List(std::result::Result<Vec<hauntty::fetch::RemoteTheme>, String>),
-    Download(std::result::Result<String, String>),
+    ListThemes(std::result::Result<Vec<RemoteTheme>, String>),
+    DownloadTheme(std::result::Result<String, String>),
+    ListStarship(std::result::Result<Vec<RemoteStarshipPreset>, String>),
+    DownloadStarship(std::result::Result<(String, String), String>),
 }
 
 pub struct App {
@@ -367,29 +381,70 @@ impl App {
         self.fetch_rx = None;
         self.fetching = false;
         match msg {
-            FetchMsg::List(Ok(remotes)) => {
-                // If the user closed the overlay while it loaded, drop the result.
+            FetchMsg::ListThemes(Ok(remotes)) => {
                 if self.mode != Mode::Fetch {
                     return;
                 }
                 let filtered = (0..remotes.len()).collect();
                 self.fetch = Some(FetchState {
+                    target: FetchTarget::Themes,
                     remotes,
+                    starship_remotes: Vec::new(),
                     filter: String::new(),
                     filtered,
                     selected: 0,
                 });
             }
-            FetchMsg::List(Err(e)) => {
+            FetchMsg::ListThemes(Err(e)) => {
                 self.mode = Mode::Normal;
                 self.fetch = None;
                 self.toast(ToastKind::Error, format!("Fetch failed: {e}"));
             }
-            FetchMsg::Download(Ok(name)) => {
+            FetchMsg::DownloadTheme(Ok(name)) => {
                 self.reload_themes();
                 self.toast(ToastKind::Success, format!("Downloaded '{name}'."));
             }
-            FetchMsg::Download(Err(e)) => {
+            FetchMsg::DownloadTheme(Err(e)) => {
+                self.toast(ToastKind::Error, format!("Download failed: {e}"));
+            }
+            FetchMsg::ListStarship(Ok(remotes)) => {
+                if self.mode != Mode::Fetch {
+                    return;
+                }
+                let filtered = (0..remotes.len()).collect();
+                self.fetch = Some(FetchState {
+                    target: FetchTarget::Starship,
+                    remotes: Vec::new(),
+                    starship_remotes: remotes,
+                    filter: String::new(),
+                    filtered,
+                    selected: 0,
+                });
+            }
+            FetchMsg::ListStarship(Err(e)) => {
+                self.mode = Mode::Normal;
+                self.fetch = None;
+                self.toast(ToastKind::Error, format!("Preset fetch failed: {e}"));
+            }
+            FetchMsg::DownloadStarship(Ok((name, content))) => {
+                let preset = hauntty::starship::StarshipPreset {
+                    id: "remote-preset",
+                    name: Box::leak(name.clone().into_boxed_str()),
+                    description: "Downloaded remote preset (previewing)",
+                    preview: "Remote Preset",
+                    toml_content: Box::leak(content.into_boxed_str()),
+                };
+                self.starship_presets.push(preset);
+                self.recompute_starship_filter();
+                self.starship_selected = self.starship_presets.len().saturating_sub(1);
+                self.mode = Mode::Normal;
+                self.tab = Tab::Starship;
+                self.toast(
+                    ToastKind::Success,
+                    format!("Downloaded preset '{name}'. Press Enter to apply."),
+                );
+            }
+            FetchMsg::DownloadStarship(Err(e)) => {
                 self.toast(ToastKind::Error, format!("Download failed: {e}"));
             }
         }
@@ -650,8 +705,27 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.fetch_rx = Some(rx);
         std::thread::spawn(move || {
-            let res = hauntty::fetch::list_remote_themes().map_err(|e| format!("{e:#}"));
-            let _ = tx.send(FetchMsg::List(res));
+            let res = fetch::list_remote_themes().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(FetchMsg::ListThemes(res));
+        });
+    }
+
+    #[cfg(feature = "online")]
+    pub fn start_starship_fetch(&mut self) {
+        if self.fetching {
+            return;
+        }
+        self.mode = Mode::Fetch;
+        self.fetch = None;
+        self.fetching = true;
+        self.spinner = 0;
+        self.toast = None;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.fetch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = fetch::list_remote_starship_presets().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(FetchMsg::ListStarship(res));
         });
     }
 
@@ -670,13 +744,26 @@ impl App {
     pub fn fetch_filter_changed(&mut self) {
         if let Some(f) = &mut self.fetch {
             let q = f.filter.to_lowercase();
-            f.filtered = f
-                .remotes
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| q.is_empty() || r.name.to_lowercase().contains(&q))
-                .map(|(i, _)| i)
-                .collect();
+            match f.target {
+                FetchTarget::Themes => {
+                    f.filtered = f
+                        .remotes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| q.is_empty() || r.name.to_lowercase().contains(&q))
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                FetchTarget::Starship => {
+                    f.filtered = f
+                        .starship_remotes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| q.is_empty() || r.name.to_lowercase().contains(&q))
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+            }
             if f.selected >= f.filtered.len() {
                 f.selected = f.filtered.len().saturating_sub(1);
             }
@@ -689,22 +776,37 @@ impl App {
             return;
         }
         let Some(f) = &self.fetch else { return };
-        let Some(&idx) = f.filtered.get(f.selected) else {
+        if f.filtered.is_empty() {
             return;
-        };
-        let remote = f.remotes[idx].clone();
-        let dir = self.paths.user_theme_dir.clone();
+        }
+        let idx = f.filtered[f.selected];
+
         self.fetching = true;
         self.spinner = 0;
-
         let (tx, rx) = std::sync::mpsc::channel();
         self.fetch_rx = Some(rx);
-        std::thread::spawn(move || {
-            let res = hauntty::fetch::download_theme(&remote, &dir)
-                .map(|_| remote.name.clone())
-                .map_err(|e| format!("{e:#}"));
-            let _ = tx.send(FetchMsg::Download(res));
-        });
+
+        match f.target {
+            FetchTarget::Themes => {
+                let remote = f.remotes[idx].clone();
+                let dest_dir = self.paths.user_theme_dir.clone();
+                std::thread::spawn(move || {
+                    let res = fetch::download_theme(&remote, &dest_dir)
+                        .map(|_| remote.name)
+                        .map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(FetchMsg::DownloadTheme(res));
+                });
+            }
+            FetchTarget::Starship => {
+                let remote = f.starship_remotes[idx].clone();
+                std::thread::spawn(move || {
+                    let res = fetch::download_starship_preset_content(&remote)
+                        .map(|content| (remote.name, content))
+                        .map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(FetchMsg::DownloadStarship(res));
+                });
+            }
+        }
     }
 }
 

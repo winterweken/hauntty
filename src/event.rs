@@ -119,6 +119,8 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             KeyCode::Char('/') => app.mode = Mode::Filter,
             KeyCode::Enter => app.apply_starship_preset(),
             KeyCode::Char('i') => app.install_starship(),
+            #[cfg(feature = "online")]
+            KeyCode::Char('f') => app.start_starship_fetch(),
             _ => {}
         },
     }

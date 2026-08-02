@@ -558,7 +558,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
         Line::from("Themes tab:   ↑↓ move · / filter · Enter apply · i import .itermcolors"),
         Line::from("Settings tab: ↑↓ move · ←→ change · Enter edit/toggle · s save"),
-        Line::from("Starship tab: ↑↓ move · / filter · Enter apply preset · i install"),
+        Line::from("Starship tab: ↑↓ move · / filter · Enter apply preset · i install · f fetch"),
         Line::from("Tab / 1-3 switches panes · q quits"),
         Line::from(""),
         Line::from(Span::styled(
@@ -602,7 +602,7 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
             Line::from(""),
             Line::from(Span::styled(
                 format!(
-                    "   {}  fetching theme list from GitHub…",
+                    "   {}  fetching item list from GitHub…",
                     app.spinner_frame()
                 ),
                 Style::default().fg(ACCENT),
@@ -614,16 +614,21 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(ACCENT))
-                .title(" fetch themes "),
+                .title(" fetch items "),
         );
         f.render_widget(p, rect);
         return;
     };
 
+    let title_prefix = match fetch.target {
+        crate::app::FetchTarget::Themes => "fetch themes",
+        crate::app::FetchTarget::Starship => "fetch starship presets",
+    };
+
     let title = if app.fetching {
-        format!(" fetch themes  {} downloading… ", app.spinner_frame())
+        format!(" {title_prefix}  {} downloading… ", app.spinner_frame())
     } else {
-        format!(" fetch themes ({}) ", fetch.filtered.len())
+        format!(" {title_prefix} ({}) ", fetch.filtered.len())
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
@@ -640,12 +645,21 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
         rect,
     );
 
-    let items: Vec<ListItem> = fetch
-        .filtered
-        .iter()
-        .filter_map(|&i| fetch.remotes.get(i))
-        .map(|r| ListItem::new(Line::from(format!("  {}", r.name))))
-        .collect();
+    let items: Vec<ListItem> = match fetch.target {
+        crate::app::FetchTarget::Themes => fetch
+            .filtered
+            .iter()
+            .filter_map(|&i| fetch.remotes.get(i))
+            .map(|r| ListItem::new(Line::from(format!("  {}", r.name))))
+            .collect(),
+        crate::app::FetchTarget::Starship => fetch
+            .filtered
+            .iter()
+            .filter_map(|&i| fetch.starship_remotes.get(i))
+            .map(|r| ListItem::new(Line::from(format!("  {}", r.name))))
+            .collect(),
+    };
+
     let list = List::new(items)
         .highlight_style(
             Style::default()
