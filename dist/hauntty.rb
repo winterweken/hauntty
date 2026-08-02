@@ -7,7 +7,7 @@
 class Hauntty < Formula
   desc "TUI theme & settings manager for the Ghostty terminal"
   homepage "https://github.com/winterweken/hauntty"
-  version "0.1.2"
+  version "0.1.3"
   license "MIT"
 
   on_macos do
