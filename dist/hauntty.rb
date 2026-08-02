@@ -13,22 +13,22 @@ class Hauntty < Formula
   on_macos do
     on_arm do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "2d4886c48b358869e3deba991eddfe4e85ce5b3fb25d09d629544cbf4f11ceff"
+      sha256 "5e8d248366cef4467f9dfe2d9dfcb0276e389c8df5b444499f4e32413d241e09"
     end
     on_intel do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "d75c655ef7175d0f4d5432321c3f48a03555098d25ab1474012dae037ccc3084"
+      sha256 "0e803955862cc5b3ab26b0d042d07e7a9ac6beddbee3182013c4a26e14a8b66d"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "b40fe7ed492dcb1115f061d830b7a944244817de785ac0faa8e62ace52cbb931"
+      sha256 "fcea1490fde626f8f6abaa6cfd82105a86e9f1e78ce02cc399a2d8275c9836e0"
     end
     on_intel do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "bda22336aab0fb112fc3b565d2e9cb6973fef989f2920e02d9f618844355be97"
+      sha256 "7a7d817cebefafd8e892b1d8f01e70452aca64d659498a850fa53da3308eb20c"
     end
   end
 
