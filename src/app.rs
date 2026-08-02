@@ -430,26 +430,19 @@ impl App {
                 let preset = hauntty::starship::StarshipPreset {
                     id: "remote-preset",
                     name: Box::leak(name.clone().into_boxed_str()),
-                    description: "Downloaded remote preset",
-                    preview: "Downloaded Starship Preset",
+                    description: "Downloaded remote preset (previewing)",
+                    preview: "Remote Preset",
                     toml_content: Box::leak(content.into_boxed_str()),
                 };
-                let config_path = self.starship_status.config_path.clone();
-                match hauntty::starship::apply_preset(&preset, &config_path) {
-                    Ok(outcome) => {
-                        self.starship_status.config_exists = true;
-                        self.toast(
-                            ToastKind::Success,
-                            format!(
-                                "Applied downloaded Starship preset '{name}' to {}",
-                                outcome.config_path.display()
-                            ),
-                        );
-                    }
-                    Err(e) => {
-                        self.toast(ToastKind::Error, format!("Failed to apply preset: {e:#}"))
-                    }
-                }
+                self.starship_presets.push(preset);
+                self.recompute_starship_filter();
+                self.starship_selected = self.starship_presets.len().saturating_sub(1);
+                self.mode = Mode::Normal;
+                self.tab = Tab::Starship;
+                self.toast(
+                    ToastKind::Success,
+                    format!("Downloaded preset '{name}'. Press Enter to apply."),
+                );
             }
             FetchMsg::DownloadStarship(Err(e)) => {
                 self.toast(ToastKind::Error, format!("Download failed: {e}"));
