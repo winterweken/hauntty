@@ -7,28 +7,28 @@
 class Hauntty < Formula
   desc "TUI theme & settings manager for the Ghostty terminal"
   homepage "https://github.com/winterweken/hauntty"
-  version "0.1.1"
+  version "0.1.2"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "214da4120119972078c00a2f87d76bc0d7e8538f9a3886db4d97d5363794d3e3"
+      sha256 "2d4886c48b358869e3deba991eddfe4e85ce5b3fb25d09d629544cbf4f11ceff"
     end
     on_intel do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "62b29a67641732dc866356132703345732ad82218a261586915a023786d3f50e"
+      sha256 "d75c655ef7175d0f4d5432321c3f48a03555098d25ab1474012dae037ccc3084"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "eede148111c5d0013e27b816637a8ea5eefd311183daf258182ab354a5f03c66"
+      sha256 "b40fe7ed492dcb1115f061d830b7a944244817de785ac0faa8e62ace52cbb931"
     end
     on_intel do
       url "https://github.com/winterweken/hauntty/releases/download/v#{version}/hauntty-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "b8ae9bab97361af2367c932a0a641f4000f81fd7baacf99bb1a7845b7f75503a"
+      sha256 "bda22336aab0fb112fc3b565d2e9cb6973fef989f2920e02d9f618844355be97"
     end
   end
 

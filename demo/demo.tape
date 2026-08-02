@@ -74,6 +74,33 @@ Sleep 2.6s
 Escape
 Sleep 800ms
 
+# Starship tab: browse and apply a prompt preset with an automatic backup.
+Tab
+Tab
+Sleep 1.2s
+Down
+Sleep 600ms
+Down
+Sleep 600ms
+Down
+Sleep 800ms
+Enter
+Sleep 2.2s
+
+# Filter presets.
+Type "/"
+Sleep 400ms
+Type "tokyo"
+Sleep 1.4s
+Escape
+Sleep 500ms
+Down
+Sleep 700ms
+Enter
+Sleep 2s
+Escape
+Sleep 800ms
+
 # Help overlay.
 Type "?"
 Sleep 2.2s
