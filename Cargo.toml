@@ -1,6 +1,6 @@
 [package]
 name = "hauntty"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.80"
 description = "A TUI theme and settings manager for the Ghostty terminal"
