@@ -37,9 +37,12 @@ impl SettingSpec {
     pub fn format_for_config(&self, value: &str) -> String {
         match &self.widget {
             Widget::Text => {
-                let v = value.trim();
+                // Strip newlines/carriage returns to prevent config line injection.
+                let sanitized = value.trim().replace(['\n', '\r'], "");
+                let v = sanitized.trim();
                 if v.contains(char::is_whitespace) && !(v.starts_with('"') && v.ends_with('"')) {
-                    format!("\"{v}\"")
+                    let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{escaped}\"")
                 } else {
                     v.to_string()
                 }
@@ -65,6 +68,7 @@ impl SettingSpec {
         } = &self.widget
         {
             let n = current.trim().parse::<f64>().unwrap_or(*min);
+            let n = if n.is_finite() { n } else { *min };
             let next = (n + step * dir as f64).clamp(*min, *max);
             return Some(format!("{next:.*}", decimals));
         }

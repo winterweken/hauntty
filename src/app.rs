@@ -10,7 +10,6 @@ use hauntty::paths::Paths;
 use hauntty::settings::{SettingSpec, Widget};
 use hauntty::theme::{Theme, ThemeSet};
 
-#[cfg(feature = "online")]
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +133,9 @@ pub struct App {
     #[cfg(feature = "online")]
     pub spinner: usize,
 
+    /// Receiver for an in-flight Starship install, if any.
+    starship_install_rx: Option<Receiver<Result<String, String>>>,
+
     matcher: Matcher,
 }
 
@@ -186,6 +188,7 @@ impl App {
             fetching: false,
             #[cfg(feature = "online")]
             spinner: 0,
+            starship_install_rx: None,
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.recompute_filter();
@@ -281,6 +284,21 @@ impl App {
             return;
         };
         self.mode = Mode::Normal;
+        // Validate backup name: reject path separators and traversal sequences.
+        if confirm.will_backup {
+            let trimmed = confirm.backup_name.trim();
+            if trimmed.is_empty()
+                || trimmed.contains('/')
+                || trimmed.contains('\\')
+                || trimmed.contains("..")
+            {
+                self.toast(
+                    ToastKind::Error,
+                    "Invalid backup name — path separators and '..' are not allowed",
+                );
+                return;
+            }
+        }
         let backup = if confirm.will_backup {
             Some(confirm.backup_name.as_str())
         } else {
@@ -381,6 +399,29 @@ impl App {
     #[cfg(not(feature = "online"))]
     pub fn poll_background(&mut self) {}
 
+    /// Drain a completed Starship install result, if any.
+    pub fn poll_starship_install(&mut self) {
+        let msg = match &self.starship_install_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.starship_install_rx = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.starship_install_rx = None;
+        match msg {
+            Ok(success_msg) => {
+                self.starship_status = hauntty::starship::StarshipStatus::detect();
+                self.toast(ToastKind::Success, success_msg);
+            }
+            Err(e) => self.toast(ToastKind::Error, format!("Installation failed: {e}")),
+        }
+    }
+
     /// The current spinner glyph.
     #[cfg(feature = "online")]
     pub fn spinner_frame(&self) -> char {
@@ -402,6 +443,9 @@ impl App {
     /// Adjust the selected setting by `dir` (+1/-1). No-op for text widgets.
     pub fn adjust_setting(&mut self, dir: i32) {
         let i = self.setting_selected;
+        if i >= self.settings.len() {
+            return;
+        }
         let spec = self.settings[i].clone();
         let (cur, is_default) = self.setting_value(i);
         // If unset, start from the default value.
@@ -424,6 +468,9 @@ impl App {
     /// Enter: for text settings, open the input overlay; otherwise nudge +1.
     pub fn activate_setting(&mut self) {
         let i = self.setting_selected;
+        if i >= self.settings.len() {
+            return;
+        }
         let spec = self.settings[i].clone();
         if matches!(spec.widget, Widget::Text) {
             let (cur, _) = self.setting_value(i);
@@ -525,14 +572,16 @@ impl App {
     }
 
     pub fn install_starship(&mut self) {
-        self.toast(ToastKind::Info, "Installing Starship...");
-        match hauntty::starship::install_starship() {
-            Ok(msg) => {
-                self.starship_status = hauntty::starship::StarshipStatus::detect();
-                self.toast(ToastKind::Success, msg);
-            }
-            Err(e) => self.toast(ToastKind::Error, format!("Installation failed: {e:#}")),
+        if self.starship_install_rx.is_some() {
+            return; // Already installing.
         }
+        self.toast(ToastKind::Info, "Installing Starship…");
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.starship_install_rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = hauntty::starship::install_starship().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(res);
+        });
     }
 
     // ---- input overlay submit -----------------------------------------

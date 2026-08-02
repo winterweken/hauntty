@@ -121,7 +121,7 @@ impl ConfigDocument {
 
     /// Indices of every line with this (case-insensitive) key.
     pub fn indices_of(&self, key: &str) -> Vec<usize> {
-        let k = key.to_lowercase();
+        let k = key.trim().to_lowercase();
         self.lines
             .iter()
             .enumerate()
@@ -196,7 +196,7 @@ impl ConfigDocument {
 
     /// Remove every active line with this key. Returns how many were removed.
     pub fn remove_all(&mut self, key: &str) -> usize {
-        let k = key.to_lowercase();
+        let k = key.trim().to_lowercase();
         let before = self.lines.len();
         self.lines
             .retain(|l| !matches!(l, Line::KeyValue(kv) if kv.key == k));
@@ -210,9 +210,11 @@ impl ConfigDocument {
     /// users' own convention). The original is never left truncated: on any
     /// failure the temp file is removed and the original untouched.
     pub fn save(&self) -> Result<Option<PathBuf>> {
-        let dir = self
-            .path
+        // Resolve symlinks so we write *through* them, not replace them.
+        let target_path = fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone());
+        let dir = target_path
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
@@ -221,9 +223,9 @@ impl ConfigDocument {
         })?;
 
         // 1. Back up the current on-disk file, if it exists.
-        let backup = if self.path.exists() {
+        let backup = if target_path.exists() {
             let b = self.unique_backup_path(&dir);
-            fs::copy(&self.path, &b).map_err(|source| ConfigError::Io {
+            fs::copy(&target_path, &b).map_err(|source| ConfigError::Io {
                 path: b.clone(),
                 source,
             })?;
@@ -232,11 +234,26 @@ impl ConfigDocument {
             None
         };
 
-        // 2. Write to a temp file in the same directory.
-        let tmp = dir.join(format!(".hauntty.config.tmp.{}", std::process::id()));
+        // 2. Write to a temp file in the same directory (unique name).
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = dir.join(format!(
+            ".hauntty.config.tmp.{}_{}",
+            std::process::id(),
+            stamp
+        ));
         let rendered = self.render();
+        let existing_perms = fs::metadata(&target_path).ok().map(|m| m.permissions());
         let write_result = (|| -> std::io::Result<()> {
-            let mut f = fs::File::create(&tmp)?;
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)?;
+            if let Some(ref perms) = existing_perms {
+                let _ = f.set_permissions(perms.clone());
+            }
             f.write_all(rendered.as_bytes())?;
             f.sync_all()?;
             Ok(())
@@ -247,10 +264,10 @@ impl ConfigDocument {
         }
 
         // 3. Atomically replace the original.
-        if let Err(source) = fs::rename(&tmp, &self.path) {
+        if let Err(source) = fs::rename(&tmp, &target_path) {
             let _ = fs::remove_file(&tmp);
             return Err(ConfigError::Io {
-                path: self.path.clone(),
+                path: target_path,
                 source,
             });
         }
@@ -266,13 +283,21 @@ impl ConfigDocument {
         if !base.exists() {
             return base;
         }
-        for n in 1.. {
+        for n in 1..=10_000 {
             let candidate = dir.join(format!("config.bak.{stamp}-{n}"));
             if !candidate.exists() {
                 return candidate;
             }
         }
-        unreachable!()
+        // Fallback: include PID + nanosecond timestamp for uniqueness.
+        dir.join(format!(
+            "config.bak.{stamp}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ))
     }
 
     /// Whether the config existed on disk when loaded.

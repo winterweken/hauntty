@@ -70,7 +70,13 @@ pub fn apply_theme(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(&apply_plan.suggested_backup_name);
-        let theme = build_theme_from_inline(doc, name, user_theme_dir.join(name));
+        // Sanitize: strip any path components to prevent traversal.
+        let safe_name = Path::new(name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("backup_theme");
+        let theme = build_theme_from_inline(doc, safe_name, user_theme_dir.join(safe_name));
 
         std::fs::create_dir_all(user_theme_dir).with_context(|| {
             format!(
@@ -79,7 +85,7 @@ pub fn apply_theme(
             )
         })?;
 
-        let dest = user_theme_dir.join(name);
+        let dest = user_theme_dir.join(safe_name);
         theme.save_atomic(&dest).with_context(|| {
             format!(
                 "saving current colors as theme {} (config not changed)",
@@ -140,11 +146,14 @@ pub fn neutralize_and_set_theme(doc: &mut ConfigDocument, theme_name: &str) {
     for line in old {
         match &line {
             Line::KeyValue(kv) if kv.key == "theme" => {
-                let mut kv = kv.clone();
-                kv.value = theme_name.to_string();
-                kv.edited = true;
-                new_lines.push(Line::KeyValue(kv));
-                inserted = true;
+                if !inserted {
+                    let mut kv = kv.clone();
+                    kv.value = theme_name.to_string();
+                    kv.edited = true;
+                    new_lines.push(Line::KeyValue(kv));
+                    inserted = true;
+                }
+                // Duplicate theme lines are dropped.
             }
             Line::KeyValue(kv) if INLINE_COLOR_KEYS.contains(&kv.key.as_str()) => {
                 // Drop the inline color line. If there's no existing theme line,
@@ -232,6 +241,14 @@ keybind = cmd+d=new_split:right
     #[test]
     fn neutralize_replaces_existing_theme_line() {
         let mut doc = ConfigDocument::parse("config", "font-size = 16\ntheme = Old\n");
+        neutralize_and_set_theme(&mut doc, "New");
+        assert_eq!(doc.render(), "font-size = 16\ntheme = New\n");
+    }
+
+    #[test]
+    fn neutralize_deduplicates_multiple_theme_lines() {
+        let mut doc =
+            ConfigDocument::parse("config", "font-size = 16\ntheme = Old1\ntheme = Old2\n");
         neutralize_and_set_theme(&mut doc, "New");
         assert_eq!(doc.render(), "font-size = 16\ntheme = New\n");
     }

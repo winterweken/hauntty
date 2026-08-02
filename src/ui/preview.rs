@@ -168,9 +168,12 @@ struct FillBg {
 
 impl ratatui::widgets::Widget for FillBg {
     fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                buf[(x, y)].set_bg(self.color).set_char(' ');
+        let safe = area.intersection(buf.area);
+        for y in safe.top()..safe.bottom() {
+            for x in safe.left()..safe.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_bg(self.color).set_char(' ');
+                }
             }
         }
     }
