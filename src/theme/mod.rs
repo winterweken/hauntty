@@ -106,12 +106,7 @@ impl Theme {
     /// Atomically write this theme to `path` in Ghostty format (temp file in the
     /// same directory, then rename).
     pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
-        let dir = path.parent().unwrap_or_else(|| Path::new("."));
-        std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".hauntty.theme.tmp.{}", std::process::id()));
-        std::fs::write(&tmp, self.to_ghostty_file())?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        write_atomic(path, &self.to_ghostty_file())
     }
 
     /// Serialize to Ghostty theme-file format (`#`-prefixed 6-digit hex).
@@ -135,6 +130,17 @@ impl Theme {
         push("selection-foreground", self.selection_foreground);
         out
     }
+}
+
+/// Atomically write theme-file text to `path` (temp file in the same
+/// directory, then rename).
+pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".hauntty.theme.tmp.{}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 /// A collection of themes, indexed by name, sorted for display.
