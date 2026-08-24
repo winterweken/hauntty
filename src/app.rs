@@ -312,17 +312,42 @@ impl App {
                 );
                 return;
             }
+            // Refuse names that collide with any known theme: overwriting a
+            // user theme would destroy it, and reusing a bundled theme's name
+            // would shadow it.
+            if self.themes.get(trimmed).is_some() {
+                self.toast(
+                    ToastKind::Error,
+                    format!(
+                        "A theme named '{trimmed}' already exists — choose a different backup name"
+                    ),
+                );
+                return;
+            }
         }
         let backup = if confirm.will_backup {
             Some(confirm.backup_name.as_str())
         } else {
             None
         };
+        // The currently-applied named theme, if any, so the backup captures
+        // the effective look (base theme + inline overrides). Ghostty's last
+        // `theme =` line wins, so resolve against the last one.
+        let base_theme = self
+            .config
+            .indices_of("theme")
+            .last()
+            .and_then(|&i| match &self.config.lines[i] {
+                hauntty::config::Line::KeyValue(kv) => Some(strip_quotes(&kv.value)),
+                _ => None,
+            })
+            .and_then(|name| self.themes.get(&name).cloned());
         match apply::apply_theme(
             &mut self.config,
             &confirm.theme_name,
             backup,
             &self.paths.user_theme_dir,
+            base_theme.as_ref(),
         ) {
             Ok(outcome) => {
                 self.dirty = false;
@@ -428,15 +453,34 @@ impl App {
             }
             FetchMsg::DownloadStarship(Ok((name, content))) => {
                 let preset = hauntty::starship::StarshipPreset {
-                    id: "remote-preset",
-                    name: Box::leak(name.clone().into_boxed_str()),
-                    description: "Downloaded remote preset (previewing)",
-                    preview: "Remote Preset",
-                    toml_content: Box::leak(content.into_boxed_str()),
+                    id: format!("remote-{name}").into(),
+                    name: name.clone().into(),
+                    description: "Downloaded remote preset (previewing)".into(),
+                    preview: "Remote Preset".into(),
+                    toml_content: content.into(),
                 };
-                self.starship_presets.push(preset);
+                // Re-downloading a preset replaces the earlier copy instead of
+                // duplicating it in the list.
+                let new_idx = match self.starship_presets.iter().position(|p| p.id == preset.id) {
+                    Some(i) => {
+                        self.starship_presets[i] = preset;
+                        i
+                    }
+                    None => {
+                        self.starship_presets.push(preset);
+                        self.starship_presets.len() - 1
+                    }
+                };
+                // Clear any active filter so the new preset is visible, then
+                // select it — `starship_selected` indexes `starship_filtered`,
+                // not `starship_presets`.
+                self.starship_filter.clear();
                 self.recompute_starship_filter();
-                self.starship_selected = self.starship_presets.len().saturating_sub(1);
+                self.starship_selected = self
+                    .starship_filtered
+                    .iter()
+                    .position(|&i| i == new_idx)
+                    .unwrap_or(0);
                 self.mode = Mode::Normal;
                 self.tab = Tab::Starship;
                 self.toast(
@@ -528,10 +572,12 @@ impl App {
         }
         let spec = self.settings[i].clone();
         if matches!(spec.widget, Widget::Text) {
-            let (cur, _) = self.setting_value(i);
+            let (cur, is_default) = self.setting_value(i);
             self.input = Some(InputState {
                 title: format!("{} — type a value, Enter to set", spec.label),
-                buffer: cur,
+                // Defaults like "(system default)" are display labels, not
+                // values — start empty so Enter can't write them verbatim.
+                buffer: if is_default { String::new() } else { cur },
                 purpose: InputPurpose::Setting(spec.key.to_string()),
             });
             self.mode = Mode::Input;
@@ -649,6 +695,19 @@ impl App {
         self.mode = Mode::Normal;
         match input.purpose {
             InputPurpose::Setting(key) => {
+                // An empty buffer clears a set key (Ghostty then falls back
+                // to its default); on an unset key it leaves the config
+                // unchanged. Never write an empty value line.
+                if input.buffer.trim().is_empty() {
+                    if self.config.remove_all(&key) > 0 {
+                        self.dirty = true;
+                        self.toast(
+                            ToastKind::Success,
+                            format!("Cleared {key} — Ghostty's default applies."),
+                        );
+                    }
+                    return;
+                }
                 let spec = self.settings.iter().find(|s| s.key == key).cloned();
                 if let Some(spec) = spec {
                     let formatted = spec.format_for_config(&input.buffer);
@@ -827,4 +886,139 @@ fn shellexpand_tilde(path: &str) -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RAII temp dir removed on drop, even during panic unwind.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_app(tag: &str, config: &str) -> (App, TempDir) {
+        let path = std::env::temp_dir().join(format!("hauntty-app-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let dir = TempDir(path);
+        let cfg = dir.0.join("config");
+        std::fs::write(&cfg, config).unwrap();
+        let themes = dir.0.join("bundled");
+        std::fs::create_dir_all(&themes).unwrap();
+        let paths = Paths::resolve(Some(cfg), Some(themes));
+        (App::new(paths).unwrap(), dir)
+    }
+
+    #[test]
+    fn text_input_on_unset_setting_starts_empty() {
+        let (mut app, _dir) = test_app("input-default", "font-size = 16\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0; // font-family: Text widget, unset
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "");
+        // Enter on the empty buffer must not write "(system default)" (or
+        // anything else) to the config.
+        app.submit_input();
+        assert!(!app.dirty);
+        assert_eq!(app.config.count("font-family"), 0);
+    }
+
+    #[test]
+    fn text_input_prefills_current_value() {
+        let (mut app, _dir) = test_app("input-current", "font-family = Menlo\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "Menlo");
+    }
+
+    #[test]
+    fn clearing_text_input_unsets_the_key() {
+        let (mut app, _dir) = test_app("input-clear", "font-family = Menlo\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        app.input.as_mut().unwrap().buffer.clear();
+        app.submit_input();
+        assert_eq!(app.config.count("font-family"), 0);
+        assert!(app.dirty);
+        assert!(app.toast.is_some(), "clearing should confirm via toast");
+    }
+
+    #[test]
+    fn backup_base_resolves_last_theme_line() {
+        // Ghostty's last `theme =` line wins; the backup must compose from it
+        // even when an earlier (stale) theme line exists.
+        let path = std::env::temp_dir().join(format!("hauntty-app-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let dir = TempDir(path);
+        let cfg = dir.0.join("config");
+        std::fs::write(&cfg, "theme = Stale\ntheme = Base\nbackground = 000000\n").unwrap();
+        let themes = dir.0.join("bundled");
+        std::fs::create_dir_all(&themes).unwrap();
+        std::fs::write(themes.join("Base"), "foreground = #f8f8f2\n").unwrap();
+        let mut app = App::new(Paths::resolve(Some(cfg), Some(themes))).unwrap();
+
+        app.confirm = Some(ConfirmState {
+            theme_name: "Base".to_string(),
+            will_backup: true,
+            backup_name: "Combo".to_string(),
+            editing_name: false,
+        });
+        app.mode = Mode::Confirm;
+        app.confirm_apply();
+
+        let backup = std::fs::read_to_string(app.paths.user_theme_dir.join("Combo")).unwrap();
+        assert!(backup.contains("background = #000000")); // inline override wins
+        assert!(backup.contains("foreground = #f8f8f2")); // from the last theme line's base
+    }
+
+    #[cfg(feature = "online")]
+    fn deliver_download(app: &mut App, name: &str, content: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.fetch_rx = Some(rx);
+        app.fetching = true;
+        tx.send(FetchMsg::DownloadStarship(Ok((
+            name.to_string(),
+            content.to_string(),
+        ))))
+        .unwrap();
+        app.poll_background();
+    }
+
+    #[cfg(feature = "online")]
+    #[test]
+    fn downloaded_starship_preset_selected_despite_filter() {
+        let (mut app, _dir) = test_app("dl-filter", "");
+        app.starship_filter = "tokyo".to_string();
+        app.recompute_starship_filter();
+        deliver_download(&mut app, "Remote Pastel", "format = \"$all\"");
+        // The filter is cleared and the new preset is the live selection, so
+        // "Press Enter to apply" actually applies it.
+        assert!(app.starship_filter.is_empty());
+        let p = app
+            .current_starship_preset()
+            .expect("downloaded preset is selected");
+        assert_eq!(p.name, "Remote Pastel");
+        assert_eq!(p.toml_content, "format = \"$all\"");
+    }
+
+    #[cfg(feature = "online")]
+    #[test]
+    fn redownloading_preset_replaces_instead_of_duplicating() {
+        let (mut app, _dir) = test_app("dl-dup", "");
+        let baseline = app.starship_presets.len();
+        deliver_download(&mut app, "Remote Pastel", "format = \"v1\"");
+        deliver_download(&mut app, "Remote Pastel", "format = \"v2\"");
+        assert_eq!(app.starship_presets.len(), baseline + 1);
+        assert_eq!(
+            app.current_starship_preset().unwrap().toml_content,
+            "format = \"v2\""
+        );
+    }
 }

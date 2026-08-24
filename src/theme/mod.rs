@@ -227,10 +227,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     // Compare digit runs without heap allocation.
                     let a_zeros = skip_char(&mut ai, '0');
                     let b_zeros = skip_char(&mut bi, '0');
-                    let (a_len, cmp) = compare_digit_runs(&mut ai, &mut bi);
-                    let b_len = a_len; // compare_digit_runs advances both equally until one ends
-                    let _ = b_len;
-                    match cmp {
+                    match compare_digit_runs(&mut ai, &mut bi) {
                         Ordering::Equal => {
                             // Same numeric value — break tie by number of
                             // leading zeros (fewer zeros = sorts first), giving
@@ -268,15 +265,13 @@ fn skip_char(it: &mut std::iter::Peekable<std::str::Chars>, ch: char) -> usize {
     n
 }
 
-/// Compare two digit runs character-by-character (no allocation). Returns the
-/// number of significant digits consumed from `a` and the ordering. Both
+/// Compare two digit runs character-by-character (no allocation). Both
 /// iterators are advanced past the digit run.
 fn compare_digit_runs(
     a: &mut std::iter::Peekable<std::str::Chars>,
     b: &mut std::iter::Peekable<std::str::Chars>,
-) -> (usize, std::cmp::Ordering) {
+) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    let mut len = 0usize;
     let mut first_diff = Ordering::Equal;
     loop {
         let ad = a.peek().is_some_and(|c| c.is_ascii_digit());
@@ -285,7 +280,6 @@ fn compare_digit_runs(
             (true, true) => {
                 let ca = a.next().unwrap();
                 let cb = b.next().unwrap();
-                len += 1;
                 if first_diff == Ordering::Equal {
                     first_diff = ca.cmp(&cb);
                 }
@@ -295,15 +289,15 @@ fn compare_digit_runs(
                 while a.peek().is_some_and(|c| c.is_ascii_digit()) {
                     a.next();
                 }
-                return (len, Ordering::Greater);
+                return Ordering::Greater;
             }
             (false, true) => {
                 while b.peek().is_some_and(|c| c.is_ascii_digit()) {
                     b.next();
                 }
-                return (len, Ordering::Less);
+                return Ordering::Less;
             }
-            (false, false) => return (len, first_diff),
+            (false, false) => return first_diff,
         }
     }
 }

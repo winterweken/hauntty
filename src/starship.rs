@@ -1,5 +1,6 @@
 //! Starship prompt detection, preset management, and installer integration.
 
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,12 +60,18 @@ impl StarshipStatus {
 /// Resolve the Starship config path, respecting $STARSHIP_CONFIG and
 /// $XDG_CONFIG_HOME, and always falling back to `~/.config/starship.toml`.
 fn starship_config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("STARSHIP_CONFIG") {
-        return PathBuf::from(p);
+    // Empty values are treated as unset (per the XDG spec) — otherwise the
+    // path would resolve relative to the current directory.
+    if let Some(p) = std::env::var_os("STARSHIP_CONFIG") {
+        let p = PathBuf::from(p);
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
     }
-    let xdg = std::env::var("XDG_CONFIG_HOME")
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".config")
@@ -97,14 +104,16 @@ fn is_executable(_path: &Path) -> bool {
     true // Windows doesn't use permission bits; .is_file() is sufficient.
 }
 
-/// An official or curated Starship prompt preset (theme).
+/// An official or curated Starship prompt preset (theme). `Cow` lets the
+/// bundled catalog keep zero-cost static strings while downloaded presets own
+/// theirs.
 #[derive(Debug, Clone)]
 pub struct StarshipPreset {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-    pub preview: &'static str,
-    pub toml_content: &'static str,
+    pub id: Cow<'static, str>,
+    pub name: Cow<'static, str>,
+    pub description: Cow<'static, str>,
+    pub preview: Cow<'static, str>,
+    pub toml_content: Cow<'static, str>,
 }
 
 /// Outcome of applying a Starship preset.
@@ -118,10 +127,10 @@ pub struct StarshipApplyOutcome {
 pub fn official_presets() -> Vec<StarshipPreset> {
     vec![
         StarshipPreset {
-            id: "nerd-font-symbols",
-            name: "Nerd Font Symbols",
-            description: "High-detail icons for git, languages, cloud, and OS environments.",
-            preview: "❯ 📁 ~/hauntty ❯  main ⇣1 ❯  v1.80 ❯",
+            id: "nerd-font-symbols".into(),
+            name: "Nerd Font Symbols".into(),
+            description: "High-detail icons for git, languages, cloud, and OS environments.".into(),
+            preview: "❯ 📁 ~/hauntty ❯  main ⇣1 ❯  v1.80 ❯".into(),
             toml_content: r#"# Starship - Nerd Font Symbols Preset
 format = "$all$fill$line_break$character"
 
@@ -138,13 +147,14 @@ symbol = " "
 
 [rust]
 symbol = " "
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "no-nerd-fonts",
-            name: "No Nerd Fonts",
-            description: "Clean standard Unicode symbols compatible with any terminal font.",
-            preview: "hauntty on git:main [rust 1.80] >",
+            id: "no-nerd-fonts".into(),
+            name: "No Nerd Fonts".into(),
+            description: "Clean standard Unicode symbols compatible with any terminal font.".into(),
+            preview: "hauntty on git:main [rust 1.80] >".into(),
             toml_content: r#"# Starship - No Nerd Fonts Preset
 [character]
 success_symbol = "[>](bold green)"
@@ -158,14 +168,16 @@ symbol = "git:"
 
 [rust]
 symbol = "rust "
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "tokyo-night",
-            name: "Tokyo Night",
+            id: "tokyo-night".into(),
+            name: "Tokyo Night".into(),
             description:
-                "Vibrant neon blue, violet, and cyan prompts matching Tokyo Night terminal themes.",
-            preview: "󰄛 hauntty   main   1.80 ",
+                "Vibrant neon blue, violet, and cyan prompts matching Tokyo Night terminal themes."
+                    .into(),
+            preview: "󰄛 hauntty   main   1.80 ".into(),
             toml_content: r#"# Starship - Tokyo Night Preset
 format = """
 [░▒▓](fg:#7aa2f7)\
@@ -184,13 +196,14 @@ format = "[$path]($style)"
 [git_branch]
 style = "fg:#1a1b26 bg:#bb9af7"
 format = "[$branch]($style)"
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "pastel-powerline",
-            name: "Pastel Powerline",
-            description: "Soft pastel powerline segments with smooth color transitions.",
-            preview: " 📁 hauntty    main   🦀 1.80  ❯",
+            id: "pastel-powerline".into(),
+            name: "Pastel Powerline".into(),
+            description: "Soft pastel powerline segments with smooth color transitions.".into(),
+            preview: " 📁 hauntty    main   🦀 1.80  ❯".into(),
             toml_content: r#"# Starship - Pastel Powerline Preset
 format = """
 [░▒▓](fg:#a3be8c)\
@@ -205,13 +218,14 @@ format = """
 [character]
 success_symbol = "[❯](bold #a3be8c)"
 error_symbol = "[❯](bold #bf616a)"
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "gruvbox-rainbow",
-            name: "Gruvbox Rainbow",
-            description: "Warm retro yellow, orange, and green segmented prompt.",
-            preview: " hauntty  󰊢 main   1.80  ❯",
+            id: "gruvbox-rainbow".into(),
+            name: "Gruvbox Rainbow".into(),
+            description: "Warm retro yellow, orange, and green segmented prompt.".into(),
+            preview: " hauntty  󰊢 main   1.80  ❯".into(),
             toml_content: r#"# Starship - Gruvbox Rainbow Preset
 format = """
 [░▒▓](fg:#d79921)\
@@ -226,13 +240,14 @@ $character"""
 [character]
 success_symbol = "[❯](bold #b8bb26)"
 error_symbol = "[❯](bold #fb4934)"
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "pure-preset",
-            name: "Pure Preset",
-            description: "Ultra-minimalist two-line prompt layout inspired by Pure Zsh.",
-            preview: "hauntty main*\n❯ ",
+            id: "pure-preset".into(),
+            name: "Pure Preset".into(),
+            description: "Ultra-minimalist two-line prompt layout inspired by Pure Zsh.".into(),
+            preview: "hauntty main*\n❯ ".into(),
             toml_content: r#"# Starship - Pure Preset
 format = """
 $directory\
@@ -247,13 +262,14 @@ style = "cyan"
 [character]
 success_symbol = "[❯](bold magenta)"
 error_symbol = "[❯](bold red)"
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "bracketed-segments",
-            name: "Bracketed Segments",
-            description: "Structured bracketed [path] [git] segments.",
-            preview: "[~/hauntty] [git:main] [rust:1.80] $ ",
+            id: "bracketed-segments".into(),
+            name: "Bracketed Segments".into(),
+            description: "Structured bracketed [path] [git] segments.".into(),
+            preview: "[~/hauntty] [git:main] [rust:1.80] $ ".into(),
             toml_content: r#"# Starship - Bracketed Segments Preset
 format = "[$directory]($style) [$git_branch]($style) $character"
 
@@ -264,13 +280,15 @@ style = "bold blue"
 [git_branch]
 format = "\\[[git:$branch]($style)\\]"
 style = "bold purple"
-"#,
+"#
+            .into(),
         },
         StarshipPreset {
-            id: "plain-text-symbols",
-            name: "Plain Text ASCII",
-            description: "Lightweight ASCII prompt for basic terminals without custom glyphs.",
-            preview: "DIR:hauntty GIT:main > ",
+            id: "plain-text-symbols".into(),
+            name: "Plain Text ASCII".into(),
+            description: "Lightweight ASCII prompt for basic terminals without custom glyphs."
+                .into(),
+            preview: "DIR:hauntty GIT:main > ".into(),
             toml_content: r#"# Starship - Plain Text ASCII Preset
 format = "$directory $git_branch $character"
 
@@ -283,7 +301,8 @@ format = "GIT:$branch"
 [character]
 success_symbol = "> "
 error_symbol = "!> "
-"#,
+"#
+            .into(),
         },
     ]
 }
@@ -327,8 +346,27 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ));
-    fs::write(&tmp_path, preset.toml_content)
-        .with_context(|| format!("writing temp starship preset to {}", tmp_path.display()))?;
+    // Preserve the destination's permissions (e.g. a chmod 600 config): rename
+    // keeps the temp file's mode, so copy the existing mode onto it first.
+    let existing_perms = fs::metadata(&real_config).ok().map(|m| m.permissions());
+    let write_result = (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)?;
+        if let Some(ref perms) = existing_perms {
+            let _ = f.set_permissions(perms.clone());
+        }
+        f.write_all(preset.toml_content.as_bytes())?;
+        f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e)
+            .with_context(|| format!("writing temp starship preset to {}", tmp_path.display()));
+    }
     if let Err(e) = fs::rename(&tmp_path, &real_config) {
         let _ = fs::remove_file(&tmp_path);
         return Err(e).with_context(|| format!("renaming temp file to {}", real_config.display()));
@@ -401,5 +439,42 @@ pub fn install_starship() -> Result<String> {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RAII temp dir removed on drop, even during panic unwind.
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_preset_preserves_config_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("hauntty-starship-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let dir = TempDir(path);
+        let config = dir.0.join("starship.toml");
+        fs::write(&config, "format = \"$all\"\n").unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let presets = official_presets();
+        let outcome = apply_preset(&presets[0], &config).unwrap();
+        assert!(outcome.backup_path.is_some());
+
+        let mode = fs::metadata(&config).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "chmod 600 should survive an apply");
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            presets[0].toml_content.as_ref()
+        );
     }
 }
