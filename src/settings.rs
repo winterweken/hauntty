@@ -32,6 +32,15 @@ pub struct SettingSpec {
 }
 
 impl SettingSpec {
+    /// True when `default` is a human-readable placeholder like
+    /// "(system default)" rather than a real config value. Placeholders must
+    /// never be written to the config; real defaults (e.g.
+    /// shell-integration-features' "cursor,sudo,title") are safe to prefill
+    /// and edit. The registry test pins exactly which entries are labels.
+    pub fn default_is_label(&self) -> bool {
+        self.default.starts_with('(')
+    }
+
     /// Format a raw user value for writing to the config (quoting text with
     /// spaces, normalizing numbers to the widget's precision).
     pub fn format_for_config(&self, value: &str) -> String {
@@ -295,5 +304,17 @@ mod tests {
         let s = spec("cursor-style-blink");
         assert_eq!(s.cycle("true", 1).as_deref(), Some("false"));
         assert_eq!(s.cycle("false", 1).as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn label_defaults_are_exactly_the_placeholder_ones() {
+        // Guard for default_is_label(): if a future entry gains a real
+        // default that starts with '(', this test forces a deliberate look.
+        let labels: Vec<&str> = registry()
+            .iter()
+            .filter(|s| s.default_is_label())
+            .map(|s| s.key)
+            .collect();
+        assert_eq!(labels, vec!["font-family", "command"]);
     }
 }

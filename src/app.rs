@@ -596,9 +596,15 @@ impl App {
             let (cur, is_default) = self.setting_value(i);
             self.input = Some(InputState {
                 title: format!("{} — type a value, Enter to set", spec.label),
-                // Defaults like "(system default)" are display labels, not
-                // values — start empty so Enter can't write them verbatim.
-                buffer: if is_default { String::new() } else { cur },
+                // Placeholder defaults like "(system default)" are display
+                // labels, not values — start empty so Enter can't write them
+                // verbatim. Real-valued defaults (shell-integration-features'
+                // "cursor,sudo,title") prefill so they can be append-edited.
+                buffer: if is_default && spec.default_is_label() {
+                    String::new()
+                } else {
+                    cur
+                },
                 purpose: InputPurpose::Setting(spec.key.to_string()),
             });
             self.mode = Mode::Input;
@@ -962,6 +968,23 @@ mod tests {
         app.setting_selected = 0;
         app.activate_setting();
         assert_eq!(app.input.as_ref().unwrap().buffer, "Menlo");
+    }
+
+    #[test]
+    fn text_input_prefills_real_valued_default() {
+        // shell-integration-features' default "cursor,sudo,title" is a real
+        // value, not a placeholder label — it must prefill even when unset so
+        // the user can append (e.g. ",clipboard") without losing the three
+        // default features.
+        let (mut app, _dir) = test_app("input-real-default", "font-size = 16\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = app
+            .settings
+            .iter()
+            .position(|s| s.key == "shell-integration-features")
+            .unwrap();
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "cursor,sudo,title");
     }
 
     #[test]
