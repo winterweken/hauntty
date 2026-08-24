@@ -4,6 +4,7 @@ pub mod color;
 mod parse;
 
 pub use color::Rgb;
+pub(crate) use parse::capture_line;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,12 @@ pub struct Theme {
     pub cursor_text: Option<Rgb>,
     pub selection_background: Option<Rgb>,
     pub selection_foreground: Option<Rgb>,
+    /// Color lines whose values Ghostty accepts but the [`Rgb`] model cannot
+    /// represent (named X11 colors, `cell-foreground`, palette indices above
+    /// 15). Kept as `(slot, verbatim line)` so a later value for the same
+    /// slot replaces an earlier one, and re-emitted on save so no color is
+    /// ever silently dropped. Ignored by previews.
+    pub raw_extras: Vec<(String, String)>,
 }
 
 impl Theme {
@@ -57,6 +64,7 @@ impl Theme {
             cursor_text: None,
             selection_background: None,
             selection_foreground: None,
+            raw_extras: Vec::new(),
         }
     }
 
@@ -106,7 +114,12 @@ impl Theme {
     /// Atomically write this theme to `path` in Ghostty format (temp file in the
     /// same directory, then rename).
     pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
-        write_atomic(path, &self.to_ghostty_file())
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!(".hauntty.theme.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, self.to_ghostty_file())?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
     }
 
     /// Serialize to Ghostty theme-file format (`#`-prefixed 6-digit hex).
@@ -128,19 +141,14 @@ impl Theme {
         push("cursor-text", self.cursor_text);
         push("selection-background", self.selection_background);
         push("selection-foreground", self.selection_foreground);
+        // Raw lines go last; any field they override was cleared when they
+        // were captured, so no key is emitted twice.
+        for (_, line) in &self.raw_extras {
+            out.push_str(line);
+            out.push('\n');
+        }
         out
     }
-}
-
-/// Atomically write theme-file text to `path` (temp file in the same
-/// directory, then rename).
-pub(crate) fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".hauntty.theme.tmp.{}", std::process::id()));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 /// A collection of themes, indexed by name, sorted for display.

@@ -533,10 +533,23 @@ impl App {
     /// The displayed value of a setting and whether it is the (unset) default.
     pub fn setting_value(&self, i: usize) -> (String, bool) {
         let spec = &self.settings[i];
+        // A repeated key (e.g. a font-family fallback stack) is set, not
+        // default — but has no single value to display or edit.
+        if self.config.count(spec.key) > 1 {
+            return ("(multiple entries)".to_string(), false);
+        }
         match self.config.get_single(spec.key) {
             Some(v) => (strip_quotes(v), false),
             None => (spec.default.to_string(), true),
         }
+    }
+
+    /// Explain why a repeated key cannot be edited from the settings list.
+    fn toast_repeated_key(&mut self, key: &str) {
+        self.toast(
+            ToastKind::Info,
+            format!("{key} appears multiple times in the config (a fallback list) — edit the file directly."),
+        );
     }
 
     /// Adjust the selected setting by `dir` (+1/-1). No-op for text widgets.
@@ -546,6 +559,10 @@ impl App {
             return;
         }
         let spec = self.settings[i].clone();
+        if self.config.count(spec.key) > 1 {
+            self.toast_repeated_key(spec.key);
+            return;
+        }
         let (cur, is_default) = self.setting_value(i);
         // If unset, start from the default value.
         let base = if is_default {
@@ -572,6 +589,10 @@ impl App {
         }
         let spec = self.settings[i].clone();
         if matches!(spec.widget, Widget::Text) {
+            if self.config.count(spec.key) > 1 {
+                self.toast_repeated_key(spec.key);
+                return;
+            }
             let (cur, is_default) = self.setting_value(i);
             self.input = Some(InputState {
                 title: format!("{} — type a value, Enter to set", spec.label),
@@ -697,14 +718,21 @@ impl App {
             InputPurpose::Setting(key) => {
                 // An empty buffer clears a set key (Ghostty then falls back
                 // to its default); on an unset key it leaves the config
-                // unchanged. Never write an empty value line.
+                // unchanged. Never write an empty value line, and never
+                // delete a repeated-key stack (e.g. font-family fallbacks)
+                // the editor was not showing.
                 if input.buffer.trim().is_empty() {
-                    if self.config.remove_all(&key) > 0 {
-                        self.dirty = true;
-                        self.toast(
-                            ToastKind::Success,
-                            format!("Cleared {key} — Ghostty's default applies."),
-                        );
+                    match self.config.count(&key) {
+                        0 => {}
+                        1 => {
+                            self.config.remove_all(&key);
+                            self.dirty = true;
+                            self.toast(
+                                ToastKind::Success,
+                                format!("Cleared {key} — Ghostty's default applies."),
+                            );
+                        }
+                        _ => self.toast_repeated_key(&key),
                     }
                     return;
                 }
@@ -947,6 +975,49 @@ mod tests {
         assert_eq!(app.config.count("font-family"), 0);
         assert!(app.dirty);
         assert!(app.toast.is_some(), "clearing should confirm via toast");
+    }
+
+    const FALLBACK_STACK: &str = "font-family = Menlo\nfont-family = Symbols Nerd Font\n";
+
+    #[test]
+    fn repeated_key_shows_multiple_entries_not_default() {
+        // A font-family fallback stack is set — the settings list must not
+        // display it as the unset default.
+        let (app, _dir) = test_app("repeated-display", FALLBACK_STACK);
+        let (value, is_default) = app.setting_value(0);
+        assert!(!is_default);
+        assert_eq!(value, "(multiple entries)");
+    }
+
+    #[test]
+    fn repeated_key_refuses_text_editor() {
+        let (mut app, _dir) = test_app("repeated-edit", FALLBACK_STACK);
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        assert!(
+            app.input.is_none(),
+            "editor must not open on a repeated key"
+        );
+        assert!(app.toast.is_some(), "refusal should explain via toast");
+        assert_eq!(app.config.count("font-family"), 2);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn empty_submission_never_clears_a_repeated_key() {
+        // Defense in depth: even if an input reaches submit for a repeated
+        // key, Enter on an empty buffer must not delete the whole stack.
+        let (mut app, _dir) = test_app("repeated-submit", FALLBACK_STACK);
+        app.input = Some(InputState {
+            title: String::new(),
+            buffer: String::new(),
+            purpose: InputPurpose::Setting("font-family".to_string()),
+        });
+        app.mode = Mode::Input;
+        app.submit_input();
+        assert_eq!(app.config.count("font-family"), 2);
+        assert!(!app.dirty);
     }
 
     #[test]

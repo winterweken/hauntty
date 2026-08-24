@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config::{ConfigDocument, KeyValue, Line};
-use crate::theme::{Rgb, Theme, ThemeSource};
+use crate::theme::{Theme, ThemeSource};
 
 /// The inline color keys hauntty manages during a theme apply. If any of these
 /// are present, they are (part of) the user's current look and get backed up
@@ -116,46 +116,21 @@ pub fn apply_theme(
     })
 }
 
-/// A backup theme built from the config's inline color lines: the values we
-/// can model as [`Rgb`], plus any color lines whose values Ghostty accepts but
-/// hauntty cannot parse (named X11 colors, `cell-foreground`, palette indices
-/// above 15, …). Those are preserved verbatim so the written backup file still
-/// reproduces the exact effective look.
-#[derive(Debug, Clone)]
-pub struct InlineBackup {
-    pub theme: Theme,
-    /// Raw `key = value` lines carried into the backup file unchanged.
-    pub raw_lines: Vec<String>,
-}
-
-impl InlineBackup {
-    /// Serialize to Ghostty theme-file format. Raw lines go last; any field
-    /// they override was cleared on the [`Theme`], so no key is emitted twice.
-    pub fn to_ghostty_file(&self) -> String {
-        let mut out = self.theme.to_ghostty_file();
-        for line in &self.raw_lines {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out
-    }
-
-    /// Atomically write this backup to `path` in Ghostty theme format.
-    pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
-        crate::theme::write_atomic(path, &self.to_ghostty_file())
-    }
-}
-
-/// Build an [`InlineBackup`] from the config's current inline color values,
+/// Build a backup [`Theme`] from the config's current inline color values,
 /// layered on top of `base` (the currently-applied named theme, if any) so the
-/// result reproduces the effective look. Repeated keys follow Ghostty's
-/// last-one-wins rule; values we cannot parse are preserved verbatim.
+/// result reproduces the effective look. The inline lines replay in document
+/// order with Ghostty's last-one-wins semantics, through the same capture
+/// routine the theme-file parser uses: hex values land in the modeled fields,
+/// an empty value resets a key to Ghostty's default, and values the model
+/// cannot represent (named X11 colors, `cell-foreground`, palette indices
+/// above 15) are preserved verbatim in `raw_extras` — from the base theme and
+/// the inline lines alike — so nothing is silently dropped.
 pub fn build_theme_from_inline(
     doc: &ConfigDocument,
     base: Option<&Theme>,
     name: &str,
     path: std::path::PathBuf,
-) -> InlineBackup {
+) -> Theme {
     let mut t = Theme::empty(name, ThemeSource::User, path);
     if let Some(base) = base {
         t.palette = base.palette;
@@ -165,74 +140,16 @@ pub fn build_theme_from_inline(
         t.cursor_text = base.cursor_text;
         t.selection_background = base.selection_background;
         t.selection_foreground = base.selection_foreground;
+        t.raw_extras = base.raw_extras.clone();
     }
-    let mut raw_lines: Vec<String> = Vec::new();
-
-    // Ghostty applies a repeated key last-one-wins, so the last occurrence is
-    // the effective value. A hex value lands in the theme; an empty value is
-    // Ghostty's "reset to default", so the base color must not survive it;
-    // anything else (named X11 colors, `cell-foreground`, …) is preserved
-    // verbatim rather than silently dropped.
-    let mut capture = |key: &str, field: &mut Option<Rgb>| {
-        let Some(&idx) = doc.indices_of(key).last() else {
-            return;
-        };
-        let Line::KeyValue(kv) = &doc.lines[idx] else {
-            return;
-        };
-        if kv.value.is_empty() {
-            *field = None;
-        } else if let Some(rgb) = Rgb::parse_hex(&kv.value) {
-            *field = Some(rgb);
-        } else {
-            *field = None;
-            raw_lines.push(format!("{key} = {}", kv.value));
-        }
-    };
-    capture("background", &mut t.background);
-    capture("foreground", &mut t.foreground);
-    capture("cursor-color", &mut t.cursor_color);
-    capture("cursor-text", &mut t.cursor_text);
-    capture("selection-background", &mut t.selection_background);
-    capture("selection-foreground", &mut t.selection_foreground);
-
-    // Palette lines replay in order under the same last-wins rule, keyed by
-    // index. Entries hauntty can model (index 0-15, hex value) land in the
-    // palette array; anything else Ghostty may accept (named colors, indices
-    // 16-255) is preserved verbatim.
-    let mut raw_palette: Vec<(String, String)> = Vec::new();
-    for idx in doc.indices_of("palette") {
-        let Line::KeyValue(kv) = &doc.lines[idx] else {
-            continue;
-        };
-        let parsed = kv
-            .value
-            .split_once('=')
-            .and_then(|(n, color)| n.trim().parse::<usize>().ok().map(|i| (i, color.trim())));
-        // Dedupe raw entries by palette index so a later line for the same
-        // slot replaces an earlier one.
-        let dedupe_key = parsed.map_or_else(|| kv.value.clone(), |(i, _)| i.to_string());
-        raw_palette.retain(|(k, _)| *k != dedupe_key);
-        match parsed {
-            Some((i, color)) if i < 16 => {
-                if color.is_empty() {
-                    t.palette[i] = None;
-                } else if let Some(rgb) = Rgb::parse_hex(color) {
-                    t.palette[i] = Some(rgb);
-                } else {
-                    t.palette[i] = None;
-                    raw_palette.push((dedupe_key, format!("palette = {}", kv.value)));
-                }
+    for line in &doc.lines {
+        if let Line::KeyValue(kv) = line {
+            if INLINE_COLOR_KEYS.contains(&kv.key.as_str()) {
+                crate::theme::capture_line(&mut t, &kv.key, &kv.value);
             }
-            _ => raw_palette.push((dedupe_key, format!("palette = {}", kv.value))),
         }
     }
-    raw_lines.extend(raw_palette.into_iter().map(|(_, line)| line));
-
-    InlineBackup {
-        theme: t,
-        raw_lines,
-    }
+    t
 }
 
 /// Remove every inline color line and ensure exactly one `theme = <name>` line.
@@ -281,6 +198,7 @@ pub fn neutralize_and_set_theme(doc: &mut ConfigDocument, theme_name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::Rgb;
 
     const INLINE_CONFIG: &str = "\
 term = xterm-256color
@@ -312,7 +230,7 @@ keybind = cmd+d=new_split:right
     #[test]
     fn build_theme_reads_inline_colors() {
         let doc = ConfigDocument::parse("config", INLINE_CONFIG);
-        let t = build_theme_from_inline(&doc, None, "MyDracula", "x".into()).theme;
+        let t = build_theme_from_inline(&doc, None, "MyDracula", "x".into());
         assert_eq!(t.background, Some(Rgb::new(0x28, 0x2a, 0x36)));
         assert_eq!(t.cursor_color, Some(Rgb::new(0xff, 0x4f, 0xbf)));
         assert_eq!(t.palette[0], Some(Rgb::new(0x21, 0x22, 0x2c)));
@@ -337,7 +255,7 @@ keybind = cmd+d=new_split:right
             "config",
             "theme = Base\nbackground = 000000\npalette = 4=#7aa2f7\n",
         );
-        let t = build_theme_from_inline(&doc, Some(&base), "Backup", "x".into()).theme;
+        let t = build_theme_from_inline(&doc, Some(&base), "Backup", "x".into());
         assert_eq!(t.background, Some(Rgb::new(0x00, 0x00, 0x00))); // override wins
         assert_eq!(t.foreground, Some(Rgb::new(0xee, 0xee, 0xee))); // base survives
         assert_eq!(t.palette[4], Some(Rgb::new(0x7a, 0xa2, 0xf7))); // override wins
@@ -348,8 +266,8 @@ keybind = cmd+d=new_split:right
         // Ghostty applies repeated keys last-one-wins; the backup must capture
         // the winner, not skip the key entirely.
         let doc = ConfigDocument::parse("config", "background = 111111\nbackground = 282a36\n");
-        let b = build_theme_from_inline(&doc, None, "Backup", "x".into());
-        assert_eq!(b.theme.background, Some(Rgb::new(0x28, 0x2a, 0x36)));
+        let t = build_theme_from_inline(&doc, None, "Backup", "x".into());
+        assert_eq!(t.background, Some(Rgb::new(0x28, 0x2a, 0x36)));
     }
 
     #[test]
@@ -357,10 +275,9 @@ keybind = cmd+d=new_split:right
         // Ghostty accepts named X11 colors; hauntty cannot model them as Rgb
         // but must not drop them from the backup.
         let doc = ConfigDocument::parse("config", "background = black\n");
-        let b = build_theme_from_inline(&doc, None, "Backup", "x".into());
-        assert_eq!(b.theme.background, None);
-        assert_eq!(b.raw_lines, vec!["background = black".to_string()]);
-        assert!(b.to_ghostty_file().contains("background = black\n"));
+        let t = build_theme_from_inline(&doc, None, "Backup", "x".into());
+        assert_eq!(t.background, None);
+        assert_eq!(t.to_ghostty_file(), "background = black\n");
     }
 
     #[test]
@@ -393,7 +310,7 @@ keybind = cmd+d=new_split:right
         // not lose the rest, nor named palette colors.
         let doc = ConfigDocument::parse("config", "palette = 1=red\npalette = 200=#ff00ff\n");
         let b = build_theme_from_inline(&doc, None, "Backup", "x".into());
-        assert_eq!(b.theme.palette[1], None);
+        assert_eq!(b.palette[1], None);
         let file = b.to_ghostty_file();
         assert!(file.contains("palette = 1=red\n"));
         assert!(file.contains("palette = 200=#ff00ff\n"));
@@ -404,15 +321,48 @@ keybind = cmd+d=new_split:right
         // hex then named: the named value (raw) wins and the stale hex slot
         // is cleared.
         let doc = ConfigDocument::parse("config", "palette = 1=#ff5555\npalette = 1=red\n");
-        let b = build_theme_from_inline(&doc, None, "Backup", "x".into());
-        assert_eq!(b.theme.palette[1], None);
-        assert_eq!(b.raw_lines, vec!["palette = 1=red".to_string()]);
+        let t = build_theme_from_inline(&doc, None, "Backup", "x".into());
+        assert_eq!(t.palette[1], None);
+        assert_eq!(t.to_ghostty_file(), "palette = 1=red\n");
 
         // named then hex: the hex wins and no stale raw line remains.
         let doc = ConfigDocument::parse("config", "palette = 1=red\npalette = 1=#ff5555\n");
-        let b = build_theme_from_inline(&doc, None, "Backup", "x".into());
-        assert_eq!(b.theme.palette[1], Some(Rgb::new(0xff, 0x55, 0x55)));
-        assert!(b.raw_lines.is_empty());
+        let t = build_theme_from_inline(&doc, None, "Backup", "x".into());
+        assert_eq!(t.palette[1], Some(Rgb::new(0xff, 0x55, 0x55)));
+        assert!(t.raw_extras.is_empty());
+    }
+
+    #[test]
+    fn build_theme_keeps_base_raw_values() {
+        // A base theme can itself carry values the Rgb model cannot
+        // represent; layering inline overrides on top must not drop them.
+        let base = Theme::from_str(
+            "Base",
+            crate::theme::ThemeSource::Bundled,
+            "b".into(),
+            "background = black\nselection-foreground = cell-foreground\npalette = 200=#ff00ff\n",
+        );
+
+        let doc = ConfigDocument::parse("config", "theme = Base\nforeground = f8f8f2\n");
+        let out =
+            build_theme_from_inline(&doc, Some(&base), "Backup", "x".into()).to_ghostty_file();
+        assert!(out.contains("background = black\n")); // base raw survives
+        assert!(out.contains("selection-foreground = cell-foreground\n"));
+        assert!(out.contains("palette = 200=#ff00ff\n"));
+        assert!(out.contains("foreground = #f8f8f2\n")); // inline override captured
+
+        // An inline override of the same key replaces the base's raw value…
+        let doc = ConfigDocument::parse("config", "theme = Base\nbackground = 282a36\n");
+        let out =
+            build_theme_from_inline(&doc, Some(&base), "Backup", "x".into()).to_ghostty_file();
+        assert!(out.contains("background = #282a36\n"));
+        assert!(!out.contains("black"));
+
+        // …and an inline empty value resets it.
+        let doc = ConfigDocument::parse("config", "theme = Base\nselection-foreground =\n");
+        let out =
+            build_theme_from_inline(&doc, Some(&base), "Backup", "x".into()).to_ghostty_file();
+        assert!(!out.contains("selection-foreground"));
     }
 
     #[test]
@@ -425,9 +375,9 @@ keybind = cmd+d=new_split:right
             "config",
             "theme = Base\nforeground = f8f8f2\nbackground =\n",
         );
-        let b = build_theme_from_inline(&doc, Some(&base), "Backup", "x".into());
-        assert_eq!(b.theme.background, None);
-        assert!(b.raw_lines.is_empty());
+        let t = build_theme_from_inline(&doc, Some(&base), "Backup", "x".into());
+        assert_eq!(t.background, None);
+        assert!(t.raw_extras.is_empty());
     }
 
     /// RAII temp dir removed on drop, even during panic unwind.
