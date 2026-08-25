@@ -333,7 +333,7 @@ impl App {
         // The currently-applied named theme, if any, so the backup captures
         // the effective look (base theme + inline overrides). Ghostty's last
         // `theme =` line wins, so resolve against the last one.
-        let base_theme = self
+        let base_theme_name = self
             .config
             .indices_of("theme")
             .last()
@@ -341,7 +341,33 @@ impl App {
                 hauntty::config::Line::KeyValue(kv) => Some(strip_quotes(&kv.value)),
                 _ => None,
             })
-            .and_then(|name| self.themes.get(&name).cloned());
+            .filter(|name| !name.is_empty());
+        let base_theme = match base_theme_name {
+            Some(name) => match self.themes.get(&name).cloned() {
+                Some(t) => Some(t),
+                // A base we can't resolve (Ghostty's conditional dark/light
+                // syntax, or a theme hauntty can't find) means the backup
+                // would silently miss the base theme's colors — refuse
+                // rather than claim the look was saved.
+                None if confirm.will_backup => {
+                    let why = if name.contains(':') {
+                        format!(
+                            "`theme = {name}` is conditional (dark/light), \
+                             so there is no single look to save"
+                        )
+                    } else {
+                        format!("base theme '{name}' was not found, so the backup would miss its colors")
+                    };
+                    self.toast(
+                        ToastKind::Error,
+                        format!("Can't back up your current colors: {why} — config not changed"),
+                    );
+                    return;
+                }
+                None => None,
+            },
+            None => None,
+        };
         match apply::apply_theme(
             &mut self.config,
             &confirm.theme_name,
@@ -998,6 +1024,59 @@ mod tests {
         assert_eq!(app.config.count("font-family"), 0);
         assert!(app.dirty);
         assert!(app.toast.is_some(), "clearing should confirm via toast");
+    }
+
+    fn confirm(theme_name: &str, will_backup: bool) -> ConfirmState {
+        ConfirmState {
+            theme_name: theme_name.to_string(),
+            will_backup,
+            backup_name: "My Saved Theme".to_string(),
+            editing_name: false,
+        }
+    }
+
+    #[test]
+    fn apply_refuses_backup_when_base_theme_is_conditional() {
+        // Ghostty's conditional syntax names two themes; there is no single
+        // effective look to save, so an apply that promises a backup must
+        // refuse instead of writing one that misses the base palette.
+        let (mut app, _dir) = test_app(
+            "conditional-base",
+            "theme = dark:Foo,light:Bar\nbackground = #111111\n",
+        );
+        app.confirm = Some(confirm("Whatever", true));
+        app.confirm_apply();
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Error));
+        // Config untouched: conditional theme line and override both intact.
+        assert_eq!(app.config.get_single("theme"), Some("dark:Foo,light:Bar"));
+        assert_eq!(app.config.count("background"), 1);
+        assert!(!app.paths.user_theme_dir.join("My Saved Theme").exists());
+    }
+
+    #[test]
+    fn apply_refuses_backup_when_base_theme_is_missing() {
+        // Same guard for a plain theme name hauntty cannot find: the backup
+        // would silently lack the base theme's colors.
+        let (mut app, _dir) = test_app(
+            "missing-base",
+            "theme = NoSuchTheme\nbackground = #111111\n",
+        );
+        app.confirm = Some(confirm("Whatever", true));
+        app.confirm_apply();
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Error));
+        assert_eq!(app.config.get_single("theme"), Some("NoSuchTheme"));
+        assert!(!app.paths.user_theme_dir.join("My Saved Theme").exists());
+    }
+
+    #[test]
+    fn apply_replaces_unresolved_theme_when_no_backup_needed() {
+        // Without inline colors there is nothing to back up — replacing a
+        // conditional theme line is an ordinary apply.
+        let (mut app, _dir) = test_app("conditional-nobackup", "theme = dark:Foo,light:Bar\n");
+        app.confirm = Some(confirm("New Theme", false));
+        app.confirm_apply();
+        assert_eq!(app.config.get_single("theme"), Some("New Theme"));
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Success));
     }
 
     const FALLBACK_STACK: &str = "font-family = Menlo\nfont-family = Symbols Nerd Font\n";
