@@ -641,9 +641,34 @@ impl App {
 
     fn set_setting(&mut self, key: &str, value: &str) {
         match self.config.set_single(key, value) {
-            Ok(()) => self.dirty = true,
+            Ok(()) => {
+                self.dirty = true;
+                // Ghostty's shell integration forces a bar cursor at the
+                // prompt, so a cursor-style change silently "doesn't work"
+                // there — point the user at the documented fix.
+                if key == "cursor-style" && self.shell_integration_overrides_cursor() {
+                    self.toast(
+                        ToastKind::Info,
+                        "Shell integration overrides the cursor at the prompt — \
+                         set Shell integration features to no-cursor to make this stick.",
+                    );
+                }
+            }
             Err(e) => self.toast(ToastKind::Error, format!("{e}")),
         }
+    }
+
+    /// True when Ghostty's shell integration would override `cursor-style`
+    /// at the prompt: integration is on (default) and its `cursor` feature
+    /// has not been disabled via `no-cursor`.
+    fn shell_integration_overrides_cursor(&self) -> bool {
+        if self.config.get_single("shell-integration") == Some("none") {
+            return false;
+        }
+        !self
+            .config
+            .get_single("shell-integration-features")
+            .is_some_and(|v| v.contains("no-cursor"))
     }
 
     pub fn save_settings(&mut self) {
@@ -1077,6 +1102,49 @@ mod tests {
         app.confirm_apply();
         assert_eq!(app.config.get_single("theme"), Some("New Theme"));
         assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Success));
+    }
+
+    fn select_setting(app: &mut App, key: &str) {
+        app.tab = Tab::Settings;
+        app.setting_selected = app.settings.iter().position(|s| s.key == key).unwrap();
+    }
+
+    #[test]
+    fn cursor_style_change_hints_about_shell_integration_override() {
+        // Ghostty's shell integration forces a bar cursor at the prompt, so a
+        // cursor-style change looks like it "doesn't work". Changing it while
+        // that override is active must point the user at no-cursor.
+        let (mut app, _dir) = test_app("cursor-hint", "cursor-style = block\n");
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert_eq!(app.config.get_single("cursor-style"), Some("bar"));
+        assert!(app.dirty);
+        let toast = app.toast.as_ref().expect("expected a hint toast");
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert!(toast.text.contains("no-cursor"));
+    }
+
+    #[test]
+    fn no_cursor_hint_when_cursor_feature_disabled() {
+        let (mut app, _dir) = test_app(
+            "cursor-nohint-feature",
+            "cursor-style = block\nshell-integration-features = no-cursor\n",
+        );
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert_eq!(app.config.get_single("cursor-style"), Some("bar"));
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn no_cursor_hint_when_shell_integration_off() {
+        let (mut app, _dir) = test_app(
+            "cursor-nohint-off",
+            "cursor-style = block\nshell-integration = none\n",
+        );
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert!(app.toast.is_none());
     }
 
     const FALLBACK_STACK: &str = "font-family = Menlo\nfont-family = Symbols Nerd Font\n";
