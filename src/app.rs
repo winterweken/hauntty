@@ -312,17 +312,68 @@ impl App {
                 );
                 return;
             }
+            // Refuse names that collide with any known theme: overwriting a
+            // user theme would destroy it, and reusing a bundled theme's name
+            // would shadow it.
+            if self.themes.get(trimmed).is_some() {
+                self.toast(
+                    ToastKind::Error,
+                    format!(
+                        "A theme named '{trimmed}' already exists — choose a different backup name"
+                    ),
+                );
+                return;
+            }
         }
         let backup = if confirm.will_backup {
             Some(confirm.backup_name.as_str())
         } else {
             None
         };
+        // The currently-applied named theme, if any, so the backup captures
+        // the effective look (base theme + inline overrides). Ghostty's last
+        // `theme =` line wins, so resolve against the last one.
+        let base_theme_name = self
+            .config
+            .indices_of("theme")
+            .last()
+            .and_then(|&i| match &self.config.lines[i] {
+                hauntty::config::Line::KeyValue(kv) => Some(strip_quotes(&kv.value)),
+                _ => None,
+            })
+            .filter(|name| !name.is_empty());
+        let base_theme = match base_theme_name {
+            Some(name) => match self.themes.get(&name).cloned() {
+                Some(t) => Some(t),
+                // A base we can't resolve (Ghostty's conditional dark/light
+                // syntax, or a theme hauntty can't find) means the backup
+                // would silently miss the base theme's colors — refuse
+                // rather than claim the look was saved.
+                None if confirm.will_backup => {
+                    let why = if name.contains(':') {
+                        format!(
+                            "`theme = {name}` is conditional (dark/light), \
+                             so there is no single look to save"
+                        )
+                    } else {
+                        format!("base theme '{name}' was not found, so the backup would miss its colors")
+                    };
+                    self.toast(
+                        ToastKind::Error,
+                        format!("Can't back up your current colors: {why} — config not changed"),
+                    );
+                    return;
+                }
+                None => None,
+            },
+            None => None,
+        };
         match apply::apply_theme(
             &mut self.config,
             &confirm.theme_name,
             backup,
             &self.paths.user_theme_dir,
+            base_theme.as_ref(),
         ) {
             Ok(outcome) => {
                 self.dirty = false;
@@ -428,15 +479,34 @@ impl App {
             }
             FetchMsg::DownloadStarship(Ok((name, content))) => {
                 let preset = hauntty::starship::StarshipPreset {
-                    id: "remote-preset",
-                    name: Box::leak(name.clone().into_boxed_str()),
-                    description: "Downloaded remote preset (previewing)",
-                    preview: "Remote Preset",
-                    toml_content: Box::leak(content.into_boxed_str()),
+                    id: format!("remote-{name}").into(),
+                    name: name.clone().into(),
+                    description: "Downloaded remote preset (previewing)".into(),
+                    preview: "Remote Preset".into(),
+                    toml_content: content.into(),
                 };
-                self.starship_presets.push(preset);
+                // Re-downloading a preset replaces the earlier copy instead of
+                // duplicating it in the list.
+                let new_idx = match self.starship_presets.iter().position(|p| p.id == preset.id) {
+                    Some(i) => {
+                        self.starship_presets[i] = preset;
+                        i
+                    }
+                    None => {
+                        self.starship_presets.push(preset);
+                        self.starship_presets.len() - 1
+                    }
+                };
+                // Clear any active filter so the new preset is visible, then
+                // select it — `starship_selected` indexes `starship_filtered`,
+                // not `starship_presets`.
+                self.starship_filter.clear();
                 self.recompute_starship_filter();
-                self.starship_selected = self.starship_presets.len().saturating_sub(1);
+                self.starship_selected = self
+                    .starship_filtered
+                    .iter()
+                    .position(|&i| i == new_idx)
+                    .unwrap_or(0);
                 self.mode = Mode::Normal;
                 self.tab = Tab::Starship;
                 self.toast(
@@ -489,10 +559,23 @@ impl App {
     /// The displayed value of a setting and whether it is the (unset) default.
     pub fn setting_value(&self, i: usize) -> (String, bool) {
         let spec = &self.settings[i];
+        // A repeated key (e.g. a font-family fallback stack) is set, not
+        // default — but has no single value to display or edit.
+        if self.config.count(spec.key) > 1 {
+            return ("(multiple entries)".to_string(), false);
+        }
         match self.config.get_single(spec.key) {
             Some(v) => (strip_quotes(v), false),
             None => (spec.default.to_string(), true),
         }
+    }
+
+    /// Explain why a repeated key cannot be edited from the settings list.
+    fn toast_repeated_key(&mut self, key: &str) {
+        self.toast(
+            ToastKind::Info,
+            format!("{key} appears multiple times in the config (a fallback list) — edit the file directly."),
+        );
     }
 
     /// Adjust the selected setting by `dir` (+1/-1). No-op for text widgets.
@@ -502,6 +585,10 @@ impl App {
             return;
         }
         let spec = self.settings[i].clone();
+        if self.config.count(spec.key) > 1 {
+            self.toast_repeated_key(spec.key);
+            return;
+        }
         let (cur, is_default) = self.setting_value(i);
         // If unset, start from the default value.
         let base = if is_default {
@@ -528,10 +615,22 @@ impl App {
         }
         let spec = self.settings[i].clone();
         if matches!(spec.widget, Widget::Text) {
-            let (cur, _) = self.setting_value(i);
+            if self.config.count(spec.key) > 1 {
+                self.toast_repeated_key(spec.key);
+                return;
+            }
+            let (cur, is_default) = self.setting_value(i);
             self.input = Some(InputState {
                 title: format!("{} — type a value, Enter to set", spec.label),
-                buffer: cur,
+                // Placeholder defaults like "(system default)" are display
+                // labels, not values — start empty so Enter can't write them
+                // verbatim. Real-valued defaults (shell-integration-features'
+                // "cursor,sudo,title") prefill so they can be append-edited.
+                buffer: if is_default && spec.default_is_label() {
+                    String::new()
+                } else {
+                    cur
+                },
                 purpose: InputPurpose::Setting(spec.key.to_string()),
             });
             self.mode = Mode::Input;
@@ -542,9 +641,34 @@ impl App {
 
     fn set_setting(&mut self, key: &str, value: &str) {
         match self.config.set_single(key, value) {
-            Ok(()) => self.dirty = true,
+            Ok(()) => {
+                self.dirty = true;
+                // Ghostty's shell integration forces a bar cursor at the
+                // prompt, so a cursor-style change silently "doesn't work"
+                // there — point the user at the documented fix.
+                if key == "cursor-style" && self.shell_integration_overrides_cursor() {
+                    self.toast(
+                        ToastKind::Info,
+                        "Shell integration overrides the cursor at the prompt — \
+                         set Shell integration features to no-cursor to make this stick.",
+                    );
+                }
+            }
             Err(e) => self.toast(ToastKind::Error, format!("{e}")),
         }
+    }
+
+    /// True when Ghostty's shell integration would override `cursor-style`
+    /// at the prompt: integration is on (default) and its `cursor` feature
+    /// has not been disabled via `no-cursor`.
+    fn shell_integration_overrides_cursor(&self) -> bool {
+        if self.config.get_single("shell-integration") == Some("none") {
+            return false;
+        }
+        !self
+            .config
+            .get_single("shell-integration-features")
+            .is_some_and(|v| v.contains("no-cursor"))
     }
 
     pub fn save_settings(&mut self) {
@@ -649,6 +773,26 @@ impl App {
         self.mode = Mode::Normal;
         match input.purpose {
             InputPurpose::Setting(key) => {
+                // An empty buffer clears a set key (Ghostty then falls back
+                // to its default); on an unset key it leaves the config
+                // unchanged. Never write an empty value line, and never
+                // delete a repeated-key stack (e.g. font-family fallbacks)
+                // the editor was not showing.
+                if input.buffer.trim().is_empty() {
+                    match self.config.count(&key) {
+                        0 => {}
+                        1 => {
+                            self.config.remove_all(&key);
+                            self.dirty = true;
+                            self.toast(
+                                ToastKind::Success,
+                                format!("Cleared {key} — Ghostty's default applies."),
+                            );
+                        }
+                        _ => self.toast_repeated_key(&key),
+                    }
+                    return;
+                }
                 let spec = self.settings.iter().find(|s| s.key == key).cloned();
                 if let Some(spec) = spec {
                     let formatted = spec.format_for_config(&input.buffer);
@@ -827,4 +971,295 @@ fn shellexpand_tilde(path: &str) -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// RAII temp dir removed on drop, even during panic unwind.
+    struct TempDir(std::path::PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn test_app(tag: &str, config: &str) -> (App, TempDir) {
+        let path = std::env::temp_dir().join(format!("hauntty-app-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let dir = TempDir(path);
+        let cfg = dir.0.join("config");
+        std::fs::write(&cfg, config).unwrap();
+        let themes = dir.0.join("bundled");
+        std::fs::create_dir_all(&themes).unwrap();
+        let paths = Paths::resolve(Some(cfg), Some(themes));
+        (App::new(paths).unwrap(), dir)
+    }
+
+    #[test]
+    fn text_input_on_unset_setting_starts_empty() {
+        let (mut app, _dir) = test_app("input-default", "font-size = 16\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0; // font-family: Text widget, unset
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "");
+        // Enter on the empty buffer must not write "(system default)" (or
+        // anything else) to the config.
+        app.submit_input();
+        assert!(!app.dirty);
+        assert_eq!(app.config.count("font-family"), 0);
+    }
+
+    #[test]
+    fn text_input_prefills_current_value() {
+        let (mut app, _dir) = test_app("input-current", "font-family = Menlo\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "Menlo");
+    }
+
+    #[test]
+    fn text_input_prefills_real_valued_default() {
+        // shell-integration-features' default "cursor,sudo,title" is a real
+        // value, not a placeholder label — it must prefill even when unset so
+        // the user can append (e.g. ",clipboard") without losing the three
+        // default features.
+        let (mut app, _dir) = test_app("input-real-default", "font-size = 16\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = app
+            .settings
+            .iter()
+            .position(|s| s.key == "shell-integration-features")
+            .unwrap();
+        app.activate_setting();
+        assert_eq!(app.input.as_ref().unwrap().buffer, "cursor,sudo,title");
+    }
+
+    #[test]
+    fn clearing_text_input_unsets_the_key() {
+        let (mut app, _dir) = test_app("input-clear", "font-family = Menlo\n");
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        app.input.as_mut().unwrap().buffer.clear();
+        app.submit_input();
+        assert_eq!(app.config.count("font-family"), 0);
+        assert!(app.dirty);
+        assert!(app.toast.is_some(), "clearing should confirm via toast");
+    }
+
+    fn confirm(theme_name: &str, will_backup: bool) -> ConfirmState {
+        ConfirmState {
+            theme_name: theme_name.to_string(),
+            will_backup,
+            backup_name: "My Saved Theme".to_string(),
+            editing_name: false,
+        }
+    }
+
+    #[test]
+    fn apply_refuses_backup_when_base_theme_is_conditional() {
+        // Ghostty's conditional syntax names two themes; there is no single
+        // effective look to save, so an apply that promises a backup must
+        // refuse instead of writing one that misses the base palette.
+        let (mut app, _dir) = test_app(
+            "conditional-base",
+            "theme = dark:Foo,light:Bar\nbackground = #111111\n",
+        );
+        app.confirm = Some(confirm("Whatever", true));
+        app.confirm_apply();
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Error));
+        // Config untouched: conditional theme line and override both intact.
+        assert_eq!(app.config.get_single("theme"), Some("dark:Foo,light:Bar"));
+        assert_eq!(app.config.count("background"), 1);
+        assert!(!app.paths.user_theme_dir.join("My Saved Theme").exists());
+    }
+
+    #[test]
+    fn apply_refuses_backup_when_base_theme_is_missing() {
+        // Same guard for a plain theme name hauntty cannot find: the backup
+        // would silently lack the base theme's colors.
+        let (mut app, _dir) = test_app(
+            "missing-base",
+            "theme = NoSuchTheme\nbackground = #111111\n",
+        );
+        app.confirm = Some(confirm("Whatever", true));
+        app.confirm_apply();
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Error));
+        assert_eq!(app.config.get_single("theme"), Some("NoSuchTheme"));
+        assert!(!app.paths.user_theme_dir.join("My Saved Theme").exists());
+    }
+
+    #[test]
+    fn apply_replaces_unresolved_theme_when_no_backup_needed() {
+        // Without inline colors there is nothing to back up — replacing a
+        // conditional theme line is an ordinary apply.
+        let (mut app, _dir) = test_app("conditional-nobackup", "theme = dark:Foo,light:Bar\n");
+        app.confirm = Some(confirm("New Theme", false));
+        app.confirm_apply();
+        assert_eq!(app.config.get_single("theme"), Some("New Theme"));
+        assert!(matches!(&app.toast, Some(t) if t.kind == ToastKind::Success));
+    }
+
+    fn select_setting(app: &mut App, key: &str) {
+        app.tab = Tab::Settings;
+        app.setting_selected = app.settings.iter().position(|s| s.key == key).unwrap();
+    }
+
+    #[test]
+    fn cursor_style_change_hints_about_shell_integration_override() {
+        // Ghostty's shell integration forces a bar cursor at the prompt, so a
+        // cursor-style change looks like it "doesn't work". Changing it while
+        // that override is active must point the user at no-cursor.
+        let (mut app, _dir) = test_app("cursor-hint", "cursor-style = block\n");
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert_eq!(app.config.get_single("cursor-style"), Some("bar"));
+        assert!(app.dirty);
+        let toast = app.toast.as_ref().expect("expected a hint toast");
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert!(toast.text.contains("no-cursor"));
+    }
+
+    #[test]
+    fn no_cursor_hint_when_cursor_feature_disabled() {
+        let (mut app, _dir) = test_app(
+            "cursor-nohint-feature",
+            "cursor-style = block\nshell-integration-features = no-cursor\n",
+        );
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert_eq!(app.config.get_single("cursor-style"), Some("bar"));
+        assert!(app.toast.is_none());
+    }
+
+    #[test]
+    fn no_cursor_hint_when_shell_integration_off() {
+        let (mut app, _dir) = test_app(
+            "cursor-nohint-off",
+            "cursor-style = block\nshell-integration = none\n",
+        );
+        select_setting(&mut app, "cursor-style");
+        app.adjust_setting(1);
+        assert!(app.toast.is_none());
+    }
+
+    const FALLBACK_STACK: &str = "font-family = Menlo\nfont-family = Symbols Nerd Font\n";
+
+    #[test]
+    fn repeated_key_shows_multiple_entries_not_default() {
+        // A font-family fallback stack is set — the settings list must not
+        // display it as the unset default.
+        let (app, _dir) = test_app("repeated-display", FALLBACK_STACK);
+        let (value, is_default) = app.setting_value(0);
+        assert!(!is_default);
+        assert_eq!(value, "(multiple entries)");
+    }
+
+    #[test]
+    fn repeated_key_refuses_text_editor() {
+        let (mut app, _dir) = test_app("repeated-edit", FALLBACK_STACK);
+        app.tab = Tab::Settings;
+        app.setting_selected = 0;
+        app.activate_setting();
+        assert!(
+            app.input.is_none(),
+            "editor must not open on a repeated key"
+        );
+        assert!(app.toast.is_some(), "refusal should explain via toast");
+        assert_eq!(app.config.count("font-family"), 2);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn empty_submission_never_clears_a_repeated_key() {
+        // Defense in depth: even if an input reaches submit for a repeated
+        // key, Enter on an empty buffer must not delete the whole stack.
+        let (mut app, _dir) = test_app("repeated-submit", FALLBACK_STACK);
+        app.input = Some(InputState {
+            title: String::new(),
+            buffer: String::new(),
+            purpose: InputPurpose::Setting("font-family".to_string()),
+        });
+        app.mode = Mode::Input;
+        app.submit_input();
+        assert_eq!(app.config.count("font-family"), 2);
+        assert!(!app.dirty);
+    }
+
+    #[test]
+    fn backup_base_resolves_last_theme_line() {
+        // Ghostty's last `theme =` line wins; the backup must compose from it
+        // even when an earlier (stale) theme line exists.
+        let path = std::env::temp_dir().join(format!("hauntty-app-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        let dir = TempDir(path);
+        let cfg = dir.0.join("config");
+        std::fs::write(&cfg, "theme = Stale\ntheme = Base\nbackground = 000000\n").unwrap();
+        let themes = dir.0.join("bundled");
+        std::fs::create_dir_all(&themes).unwrap();
+        std::fs::write(themes.join("Base"), "foreground = #f8f8f2\n").unwrap();
+        let mut app = App::new(Paths::resolve(Some(cfg), Some(themes))).unwrap();
+
+        app.confirm = Some(ConfirmState {
+            theme_name: "Base".to_string(),
+            will_backup: true,
+            backup_name: "Combo".to_string(),
+            editing_name: false,
+        });
+        app.mode = Mode::Confirm;
+        app.confirm_apply();
+
+        let backup = std::fs::read_to_string(app.paths.user_theme_dir.join("Combo")).unwrap();
+        assert!(backup.contains("background = #000000")); // inline override wins
+        assert!(backup.contains("foreground = #f8f8f2")); // from the last theme line's base
+    }
+
+    #[cfg(feature = "online")]
+    fn deliver_download(app: &mut App, name: &str, content: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.fetch_rx = Some(rx);
+        app.fetching = true;
+        tx.send(FetchMsg::DownloadStarship(Ok((
+            name.to_string(),
+            content.to_string(),
+        ))))
+        .unwrap();
+        app.poll_background();
+    }
+
+    #[cfg(feature = "online")]
+    #[test]
+    fn downloaded_starship_preset_selected_despite_filter() {
+        let (mut app, _dir) = test_app("dl-filter", "");
+        app.starship_filter = "tokyo".to_string();
+        app.recompute_starship_filter();
+        deliver_download(&mut app, "Remote Pastel", "format = \"$all\"");
+        // The filter is cleared and the new preset is the live selection, so
+        // "Press Enter to apply" actually applies it.
+        assert!(app.starship_filter.is_empty());
+        let p = app
+            .current_starship_preset()
+            .expect("downloaded preset is selected");
+        assert_eq!(p.name, "Remote Pastel");
+        assert_eq!(p.toml_content, "format = \"$all\"");
+    }
+
+    #[cfg(feature = "online")]
+    #[test]
+    fn redownloading_preset_replaces_instead_of_duplicating() {
+        let (mut app, _dir) = test_app("dl-dup", "");
+        let baseline = app.starship_presets.len();
+        deliver_download(&mut app, "Remote Pastel", "format = \"v1\"");
+        deliver_download(&mut app, "Remote Pastel", "format = \"v2\"");
+        assert_eq!(app.starship_presets.len(), baseline + 1);
+        assert_eq!(
+            app.current_starship_preset().unwrap().toml_content,
+            "format = \"v2\""
+        );
+    }
 }
