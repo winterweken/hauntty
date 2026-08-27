@@ -1,4 +1,4 @@
-# hauntty 👻
+# hauntty 🏚️⚡️👻
 
 A fast, keyboard-driven **TUI theme, settings & prompt manager for the [Ghostty](https://ghostty.org) terminal**.
 
