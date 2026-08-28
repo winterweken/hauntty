@@ -355,8 +355,11 @@ pub fn apply_preset(preset: &StarshipPreset, config_path: &Path) -> Result<Stars
             .write(true)
             .create_new(true)
             .open(&tmp_path)?;
+        // Must not be ignored: proceeding after a failure here would
+        // replace a restrictive config (e.g. 0600) with the temp file's
+        // default mode.
         if let Some(ref perms) = existing_perms {
-            let _ = f.set_permissions(perms.clone());
+            f.set_permissions(perms.clone())?;
         }
         f.write_all(preset.toml_content.as_bytes())?;
         f.sync_all()?;
