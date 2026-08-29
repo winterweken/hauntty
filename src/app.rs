@@ -996,8 +996,14 @@ impl App {
 
         let (tx, rx) = std::sync::mpsc::channel();
         self.fetch_rx = Some(rx);
+        let git_ref = self
+            .starship_status
+            .version
+            .as_deref()
+            .and_then(fetch::starship_ref_from_version);
         std::thread::spawn(move || {
-            let res = fetch::list_remote_starship_presets().map_err(|e| format!("{e:#}"));
+            let res = fetch::list_remote_starship_presets(git_ref.as_deref())
+                .map_err(|e| format!("{e:#}"));
             let _ = tx.send(FetchMsg::ListStarship(res));
         });
     }
