@@ -112,7 +112,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
 
 ## What's new
 
-### v0.2.0
+### v1.0.0
 
 - **Theme backups can no longer lose colors.** The backup written before a theme apply
   now captures the *effective* look: repeated keys follow Ghostty's last-one-wins rule,
@@ -132,10 +132,17 @@ hauntty --themes-dir /path    # add a directory to search for themes
   preserved or the apply aborts cleanly, plus a broad batch of review fixes across the
   app (input handling, path guards, MSRV 1.88).
 
-> Released as **0.2.0**, not 0.1.4: the library target's public API changed
+> **Why 1.0.0 and not 0.1.4.** This release changes the library target's API
 > (`apply::apply_theme` takes a base theme, `theme::Theme` gained `raw_extras`,
-> `starship::StarshipPreset` holds `Cow<'static, str>`). In a `0.x` crate the minor
-> version is Cargo's compatibility boundary, so a breaking change has to move it.
+> `starship::StarshipPreset` holds `Cow<'static, str>`). In a `0.x` crate Cargo treats
+> the *minor* as the compatibility boundary, so `^0.1.3` would have picked up a `0.1.4`
+> that no longer compiles for it. Leaving `0.x` puts hauntty on ordinary semver —
+> `1.0.1` for fixes, `1.1.0` for additions, `2.0.0` for breaks — and release candidates
+> continue as `vX.Y.Z-rc.N` pre-releases.
+>
+> The published library target (`hauntty` as a crate dependency) exists to serve the
+> binary and the integration tests; it carries **no API stability guarantee** and may
+> change in any release. Depend on the `hauntty` binary, not the lib.
 
 ### Earlier releases
 
