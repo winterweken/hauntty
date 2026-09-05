@@ -350,7 +350,7 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
         .filter_map(|&i| app.starship_presets.get(i))
         .map(|p| {
             ListItem::new(Line::from(vec![Span::styled(
-                format!("{:<24}", truncate(p.name, 24)),
+                format!("{:<24}", truncate(&p.name, 24)),
                 Style::default().bold(),
             )]))
         })
@@ -387,10 +387,13 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
 
             let overview = Paragraph::new(vec![
                 Line::from(Span::styled(
-                    preset.name,
+                    preset.name.as_ref(),
                     Style::default().fg(ACCENT).bold(),
                 )),
-                Line::from(Span::styled(preset.description, Style::default().fg(MUTED))),
+                Line::from(Span::styled(
+                    preset.description.as_ref(),
+                    Style::default().fg(MUTED),
+                )),
             ])
             .block(
                 Block::default()
@@ -402,7 +405,7 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
             f.render_widget(overview, right_rows[0]);
 
             let preview_p = Paragraph::new(vec![Line::from(Span::styled(
-                preset.preview,
+                preset.preview.as_ref(),
                 Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)).bold(),
             ))])
             .block(
@@ -413,7 +416,7 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
             );
             f.render_widget(preview_p, right_rows[1]);
 
-            let toml_p = Paragraph::new(preset.toml_content)
+            let toml_p = Paragraph::new(preset.toml_content.as_ref())
                 .style(Style::default().fg(Color::Rgb(0xc0, 0xca, 0xf5)))
                 .block(
                     Block::default()
@@ -489,11 +492,11 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     ];
     if c.will_backup {
         lines.push(Line::from(Span::styled(
-            "Your current colors aren't from a named theme, so hauntty",
+            "Your config has inline colors, so hauntty will",
             Style::default().fg(MUTED),
         )));
         lines.push(Line::from(Span::styled(
-            "will save them first as:",
+            "save your current look first as:",
             Style::default().fg(MUTED),
         )));
         let name_span = if c.editing_name {

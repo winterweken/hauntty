@@ -32,6 +32,15 @@ pub struct SettingSpec {
 }
 
 impl SettingSpec {
+    /// True when `default` is a human-readable placeholder like
+    /// "(system default)" rather than a real config value. Placeholders must
+    /// never be written to the config; real defaults (e.g.
+    /// shell-integration-features' "cursor,sudo,title") are safe to prefill
+    /// and edit. The registry test pins exactly which entries are labels.
+    pub fn default_is_label(&self) -> bool {
+        self.default.starts_with('(')
+    }
+
     /// Format a raw user value for writing to the config (quoting text with
     /// spaces, normalizing numbers to the widget's precision).
     pub fn format_for_config(&self, value: &str) -> String {
@@ -181,8 +190,9 @@ pub fn registry() -> Vec<SettingSpec> {
         SettingSpec {
             key: "cursor-style",
             label: "Cursor style",
-            help: "Shape of the text cursor.",
-            widget: Select(&["block", "bar", "underline"]),
+            help: "Shape of the text cursor. Shell integration overrides this \
+                   at the prompt unless its features include no-cursor.",
+            widget: Select(&["block", "bar", "underline", "block_hollow"]),
             default: "block",
         },
         SettingSpec {
@@ -205,6 +215,25 @@ pub fn registry() -> Vec<SettingSpec> {
             help: "Titlebar appearance (macOS only).",
             widget: Select(&["native", "transparent", "tabs", "hidden"]),
             default: "transparent",
+        },
+        SettingSpec {
+            key: "macos-icon",
+            label: "macOS app icon",
+            help: "Dock / app-switcher icon (macOS only). The custom and \
+                   custom-style variants need extra macos-icon-* keys, so set \
+                   those in the config file directly.",
+            widget: Select(&[
+                "official",
+                "blueprint",
+                "chalkboard",
+                "microchip",
+                "glass",
+                "holographic",
+                "paper",
+                "retro",
+                "xray",
+            ]),
+            default: "official",
         },
         SettingSpec {
             key: "confirm-close-surface",
@@ -287,7 +316,40 @@ mod tests {
     fn select_cycles_both_ways() {
         let s = spec("cursor-style");
         assert_eq!(s.cycle("block", 1).as_deref(), Some("bar"));
-        assert_eq!(s.cycle("block", -1).as_deref(), Some("underline"));
+        assert_eq!(s.cycle("block", -1).as_deref(), Some("block_hollow"));
+    }
+
+    #[test]
+    fn cursor_style_offers_all_ghostty_values() {
+        let Widget::Select(opts) = spec("cursor-style").widget else {
+            panic!("cursor-style must be a Select");
+        };
+        assert_eq!(opts, &["block", "bar", "underline", "block_hollow"]);
+    }
+
+    #[test]
+    fn macos_icon_offers_the_self_contained_variants() {
+        // `custom` and `custom-style` need companion keys hauntty does not
+        // manage, so the Select offers only the values that work alone.
+        let s = spec("macos-icon");
+        let Widget::Select(opts) = s.widget else {
+            panic!("macos-icon must be a Select");
+        };
+        assert_eq!(
+            opts,
+            &[
+                "official",
+                "blueprint",
+                "chalkboard",
+                "microchip",
+                "glass",
+                "holographic",
+                "paper",
+                "retro",
+                "xray"
+            ]
+        );
+        assert_eq!(s.default, "official");
     }
 
     #[test]
@@ -295,5 +357,17 @@ mod tests {
         let s = spec("cursor-style-blink");
         assert_eq!(s.cycle("true", 1).as_deref(), Some("false"));
         assert_eq!(s.cycle("false", 1).as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn label_defaults_are_exactly_the_placeholder_ones() {
+        // Guard for default_is_label(): if a future entry gains a real
+        // default that starts with '(', this test forces a deliberate look.
+        let labels: Vec<&str> = registry()
+            .iter()
+            .filter(|s| s.default_is_label())
+            .map(|s| s.key)
+            .collect();
+        assert_eq!(labels, vec!["font-family", "command"]);
     }
 }

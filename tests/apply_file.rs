@@ -45,8 +45,14 @@ fn apply_backs_up_inline_colors_and_switches_to_theme_line() {
     let user_themes = dir.join("themes");
 
     let mut doc = ConfigDocument::load(&config_path).unwrap();
-    let outcome =
-        apply::apply_theme(&mut doc, "Tokyo Night", Some("My Dracula"), &user_themes).unwrap();
+    let outcome = apply::apply_theme(
+        &mut doc,
+        "Tokyo Night",
+        Some("My Dracula"),
+        &user_themes,
+        None,
+    )
+    .unwrap();
 
     // 1. Config now has exactly one theme line and no inline colors.
     let written = fs::read_to_string(&config_path).unwrap();
@@ -76,10 +82,11 @@ fn apply_backs_up_inline_colors_and_switches_to_theme_line() {
     assert!(theme_text.contains("background = #282a36"));
     assert!(theme_text.contains("cursor-color = #ff4fbf"));
 
-    // 5. Re-applying now that a theme line exists needs no further backup.
+    // 5. Re-applying now that a theme line exists (and no inline colors
+    //    remain) needs no further backup.
     let mut doc2 = ConfigDocument::load(&config_path).unwrap();
     assert!(!apply::plan(&doc2).will_backup);
-    let outcome2 = apply::apply_theme(&mut doc2, "Dracula", None, &user_themes).unwrap();
+    let outcome2 = apply::apply_theme(&mut doc2, "Dracula", None, &user_themes, None).unwrap();
     assert!(outcome2.backup_theme_path.is_none());
     let written2 = fs::read_to_string(&config_path).unwrap();
     assert_eq!(written2.matches("theme = ").count(), 1);

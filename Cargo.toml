@@ -1,8 +1,10 @@
 [package]
 name = "hauntty"
-version = "0.1.3"
+version = "1.0.0"
 edition = "2021"
-rust-version = "1.80"
+# Verified by the `msrv` job in CI — keep that pin in sync with this value.
+# 1.88 is what the current dependency tree requires (darling 0.23).
+rust-version = "1.88"
 description = "A TUI theme and settings manager for the Ghostty terminal"
 license = "MIT"
 repository = "https://github.com/winterweken/hauntty"

@@ -4,6 +4,7 @@ pub mod color;
 mod parse;
 
 pub use color::Rgb;
+pub(crate) use parse::capture_line;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,12 @@ pub struct Theme {
     pub cursor_text: Option<Rgb>,
     pub selection_background: Option<Rgb>,
     pub selection_foreground: Option<Rgb>,
+    /// Color lines whose values Ghostty accepts but the [`Rgb`] model cannot
+    /// represent (named X11 colors, `cell-foreground`, palette indices above
+    /// 15). Kept as `(slot, verbatim line)` so a later value for the same
+    /// slot replaces an earlier one, and re-emitted on save so no color is
+    /// ever silently dropped. Ignored by previews.
+    pub raw_extras: Vec<(String, String)>,
 }
 
 impl Theme {
@@ -57,6 +64,7 @@ impl Theme {
             cursor_text: None,
             selection_background: None,
             selection_foreground: None,
+            raw_extras: Vec::new(),
         }
     }
 
@@ -114,6 +122,29 @@ impl Theme {
         Ok(())
     }
 
+    /// Like [`Theme::save_atomic`], but never replaces an existing filesystem
+    /// entry at `path`; returns [`std::io::ErrorKind::AlreadyExists`] instead.
+    ///
+    /// The name is claimed with `create_new` (`O_CREAT|O_EXCL`) before any
+    /// content is written. Unlike an `exists()` check followed by a rename,
+    /// that claim is atomic against a concurrent writer, and it fails on a
+    /// *dangling* symlink — which `exists()` reports as absent — rather than
+    /// clobbering it. The rename then only ever replaces the placeholder this
+    /// call just created.
+    pub fn save_atomic_new(&self, path: &Path) -> std::io::Result<()> {
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        // The name is ours now. If writing the real content fails, drop the
+        // placeholder so a failed save doesn't leave an empty theme behind.
+        self.save_atomic(path).inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+    }
+
     /// Serialize to Ghostty theme-file format (`#`-prefixed 6-digit hex).
     pub fn to_ghostty_file(&self) -> String {
         let mut out = String::new();
@@ -133,6 +164,12 @@ impl Theme {
         push("cursor-text", self.cursor_text);
         push("selection-background", self.selection_background);
         push("selection-foreground", self.selection_foreground);
+        // Raw lines go last; any field they override was cleared when they
+        // were captured, so no key is emitted twice.
+        for (_, line) in &self.raw_extras {
+            out.push_str(line);
+            out.push('\n');
+        }
         out
     }
 }
@@ -227,10 +264,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     // Compare digit runs without heap allocation.
                     let a_zeros = skip_char(&mut ai, '0');
                     let b_zeros = skip_char(&mut bi, '0');
-                    let (a_len, cmp) = compare_digit_runs(&mut ai, &mut bi);
-                    let b_len = a_len; // compare_digit_runs advances both equally until one ends
-                    let _ = b_len;
-                    match cmp {
+                    match compare_digit_runs(&mut ai, &mut bi) {
                         Ordering::Equal => {
                             // Same numeric value — break tie by number of
                             // leading zeros (fewer zeros = sorts first), giving
@@ -268,15 +302,13 @@ fn skip_char(it: &mut std::iter::Peekable<std::str::Chars>, ch: char) -> usize {
     n
 }
 
-/// Compare two digit runs character-by-character (no allocation). Returns the
-/// number of significant digits consumed from `a` and the ordering. Both
+/// Compare two digit runs character-by-character (no allocation). Both
 /// iterators are advanced past the digit run.
 fn compare_digit_runs(
     a: &mut std::iter::Peekable<std::str::Chars>,
     b: &mut std::iter::Peekable<std::str::Chars>,
-) -> (usize, std::cmp::Ordering) {
+) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    let mut len = 0usize;
     let mut first_diff = Ordering::Equal;
     loop {
         let ad = a.peek().is_some_and(|c| c.is_ascii_digit());
@@ -285,7 +317,6 @@ fn compare_digit_runs(
             (true, true) => {
                 let ca = a.next().unwrap();
                 let cb = b.next().unwrap();
-                len += 1;
                 if first_diff == Ordering::Equal {
                     first_diff = ca.cmp(&cb);
                 }
@@ -295,15 +326,15 @@ fn compare_digit_runs(
                 while a.peek().is_some_and(|c| c.is_ascii_digit()) {
                     a.next();
                 }
-                return (len, Ordering::Greater);
+                return Ordering::Greater;
             }
             (false, true) => {
                 while b.peek().is_some_and(|c| c.is_ascii_digit()) {
                     b.next();
                 }
-                return (len, Ordering::Less);
+                return Ordering::Less;
             }
-            (false, false) => return (len, first_diff),
+            (false, false) => return first_diff,
         }
     }
 }
