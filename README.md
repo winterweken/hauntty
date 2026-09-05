@@ -74,16 +74,15 @@ cargo build --release
 
 Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev)
 and ships as `vX.Y.Z-rc.N` **pre-releases** for testing before it reaches `main` and the
-stable channels. Grab the tarball for your platform from the
-[releases page](https://github.com/winterweken/hauntty/releases) — for example, the
-current RC on Apple Silicon:
+stable channels. When one is open, grab the tarball for your platform from the
+[releases page](https://github.com/winterweken/hauntty/releases) — for example, on
+Apple Silicon:
 
 ```sh
-gh release download v0.1.4-rc.3 --repo winterweken/hauntty --pattern "*aarch64-apple-darwin*"
+gh release download vX.Y.Z-rc.N --repo winterweken/hauntty --pattern "*aarch64-apple-darwin*"
 ```
 
-Each asset ships with a `.sha256` checksum. See [What's new](#whats-new) for what the
-current RC contains.
+Each asset ships with a `.sha256` checksum.
 
 ## Usage
 
@@ -113,7 +112,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
 
 ## What's new
 
-### Release candidate — v0.1.4-rc.3 (from `dev`)
+### v0.1.4
 
 - **Theme backups can no longer lose colors.** The backup written before a theme apply
   now captures the *effective* look: repeated keys follow Ghostty's last-one-wins rule,
@@ -133,7 +132,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
   preserved or the apply aborts cleanly, plus a broad batch of review fixes across the
   app (input handling, path guards, MSRV 1.88).
 
-### Stable (`main`)
+### Earlier releases
 
 - **v0.1.3** — fetch, preview, and apply Starship presets from the full
   [official catalog](https://starship.rs/presets/), beyond the bundled eight.
