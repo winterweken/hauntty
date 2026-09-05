@@ -112,7 +112,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
 
 ## What's new
 
-### v0.1.4
+### v0.2.0
 
 - **Theme backups can no longer lose colors.** The backup written before a theme apply
   now captures the *effective* look: repeated keys follow Ghostty's last-one-wins rule,
@@ -131,6 +131,11 @@ hauntty --themes-dir /path    # add a directory to search for themes
 - **Starship apply hardening** — the config's file permissions (e.g. `0600`) are
   preserved or the apply aborts cleanly, plus a broad batch of review fixes across the
   app (input handling, path guards, MSRV 1.88).
+
+> Released as **0.2.0**, not 0.1.4: the library target's public API changed
+> (`apply::apply_theme` takes a base theme, `theme::Theme` gained `raw_extras`,
+> `starship::StarshipPreset` holds `Cow<'static, str>`). In a `0.x` crate the minor
+> version is Cargo's compatibility boundary, so a breaking change has to move it.
 
 ### Earlier releases
 

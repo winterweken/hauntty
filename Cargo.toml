@@ -1,6 +1,6 @@
 [package]
 name = "hauntty"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 # Verified by the `msrv` job in CI — keep that pin in sync with this value.
 # 1.88 is what the current dependency tree requires (darling 0.23).
