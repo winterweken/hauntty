@@ -122,6 +122,29 @@ impl Theme {
         Ok(())
     }
 
+    /// Like [`Theme::save_atomic`], but never replaces an existing filesystem
+    /// entry at `path`; returns [`std::io::ErrorKind::AlreadyExists`] instead.
+    ///
+    /// The name is claimed with `create_new` (`O_CREAT|O_EXCL`) before any
+    /// content is written. Unlike an `exists()` check followed by a rename,
+    /// that claim is atomic against a concurrent writer, and it fails on a
+    /// *dangling* symlink — which `exists()` reports as absent — rather than
+    /// clobbering it. The rename then only ever replaces the placeholder this
+    /// call just created.
+    pub fn save_atomic_new(&self, path: &Path) -> std::io::Result<()> {
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(dir)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        // The name is ours now. If writing the real content fails, drop the
+        // placeholder so a failed save doesn't leave an empty theme behind.
+        self.save_atomic(path).inspect_err(|_| {
+            let _ = std::fs::remove_file(path);
+        })
+    }
+
     /// Serialize to Ghostty theme-file format (`#`-prefixed 6-digit hex).
     pub fn to_ghostty_file(&self) -> String {
         let mut out = String::new();

@@ -11,16 +11,21 @@ in `Cargo.toml` and the MSRV job in `.github/workflows/ci.yml` in sync.
 
 - `src/main.rs`: CLI arguments, terminal lifecycle, and event loop.
 - `src/app.rs`: application state and actions; `src/event.rs`: keyboard handling.
-- `src/ui/`: rendering and live theme preview.
+- `src/ui/`: rendering and live theme preview; `src/ui/color_picker.rs` is the RGB
+  picker widget and `src/ui/tools.rs` the Tools tab.
 - `src/lib.rs`: core library module exports; the library serves the binary and
   tests and has no API stability guarantee.
 - `src/config/`: lossless config parsing, rendering, backups, and file writes.
 - `src/apply.rs`: theme application and preservation of the previous appearance.
+- `src/customize.rs`: the theme color editor backing the `c` customizer.
+- `src/tools.rs` and `src/tool_setup.rs`: terminal tool catalog, detection, and
+  package-manager install plans for the Tools tab.
 - `src/theme/`: theme loading, color parsing, and theme model.
 - `src/settings.rs`: editable settings registry and widget definitions.
 - `src/paths.rs`: platform-specific config and theme discovery.
 - `src/starship.rs`: Starship detection, presets, installation, and config writes.
-- `src/import.rs` and `src/fetch.rs`: optional iTerm2 import and online catalogs.
+- `src/import.rs`, `src/import_path.rs`, and `src/fetch.rs`: optional iTerm2 import,
+  its path-entry file browser, and the online theme/preset catalogs.
 - `tests/`: config round trips, file application, and Starship integration tests.
   Unit tests live beside implementation; TUI smoke tests are in `src/smoke_test.rs`.
 
@@ -56,6 +61,9 @@ do not modify the developer's real Ghostty or Starship configuration.
   collapsing them to a single value.
 - Keep terminal restoration on exit and panic, and keep network work from
   blocking the interactive event loop.
+- Pin the Starship preset catalog to the release tag matching the detected
+  `starship --version`, falling back to `main` only when it is absent or unparsable;
+  presets must not reference modules the installed binary cannot parse.
 - Gate optional dependencies and their callers with the matching Cargo feature.
 
 ## Releases

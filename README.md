@@ -75,18 +75,21 @@ cargo build --release
 
 ### Release candidates
 
-Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev)
-and ships as `vX.Y.Z-rc.N` **pre-releases** for testing before it reaches `main` and the
-stable channels. Grab the tarball for your platform from the
-[releases page](https://github.com/winterweken/hauntty/releases) — for example, the
-current RC on Apple Silicon:
+Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev).
+When a release is being prepared, `dev` is promoted to a `dev-rc` branch and cut as a
+`vX.Y.Z-rc.N` **pre-release** for testing; once it holds up, `dev-rc` merges to `main`
+and becomes the stable release. So the path is `dev` → `dev-rc` → `main`.
+
+While a release candidate is open, grab the tarball for your platform from the
+[releases page](https://github.com/winterweken/hauntty/releases) — for example, on
+Apple Silicon:
 
 ```sh
-gh release download v0.1.4-rc.3 --repo winterweken/hauntty --pattern "*aarch64-apple-darwin*"
+gh release download vX.Y.Z-rc.N --repo winterweken/hauntty --pattern "*aarch64-apple-darwin*"
 ```
 
-Each asset ships with a `.sha256` checksum. See [What's new](#whats-new) for what the
-current RC contains.
+Each asset ships with a `.sha256` checksum. See [What's new](#whats-new) for the
+current release candidate and what it contains.
 
 ## Usage
 
@@ -105,6 +108,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
 | `/` | filter themes or Starship presets |
 | `Enter` | apply theme / edit setting / apply Starship preset |
 | `c` | customize the selected theme's colors (Themes) |
+| `p` | open the RGB color picker (theme customizer) |
 | `← →` / `h l` | change a setting |
 | `i` | import `.itermcolors` (Themes) / install Starship (Starship) |
 | `f` | fetch themes (Themes) / presets (Starship) from the upstream catalogs |
@@ -190,7 +194,28 @@ returns from the browser to the path field.
 
 ## What's new
 
-### Release candidate — v0.1.4-rc.3 (from `dev`)
+### Release candidate — v1.1.0-rc.1 (from `dev`)
+
+- **Customize a theme's colors in place** — press `c` on the Themes tab to edit the
+  background, foreground, cursor, selection, and all 16 ANSI colors against the live
+  preview, then `s` to save the result as a new named theme. The source theme and your
+  config are left untouched.
+- **Interactive RGB color picker** — press `p` while customizing to dial a color in
+  with Brightness / Red / Green / Blue controls, three step sizes, and
+  Down / Current / Up swatches, instead of typing hex by hand.
+- **Tools tab** — detect and install lazydocker, Midnight Commander, lazygit, tmux,
+  fzf, ripgrep, bat, zoxide, Git, and Docker, with dependency handling, per-tool setup
+  notes, and a confirmation step before any installer runs.
+- **Browse for the file to import** — the `.itermcolors` import prompt now includes a
+  file browser (`Tab`), alongside drag-and-drop and typed paths.
+- **Starship presets now match your installed Starship.** Presets were listed from the
+  starship repo's `main` branch, so they could reference modules newer than any
+  released binary — `catppuccin-powerline` gaining `[jj_bookmark]` produced
+  `Error in 'StarshipRoot' at 'jj_bookmark': Unknown key` on every prompt. hauntty now
+  pins the catalog to the release tag matching your `starship --version`, falling back
+  to `main` only when Starship isn't installed or that tag doesn't exist upstream.
+
+### v1.0.0
 
 - **Theme backups can no longer lose colors.** The backup written before a theme apply
   now captures the *effective* look: repeated keys follow Ghostty's last-one-wins rule,
@@ -210,7 +235,19 @@ returns from the browser to the path field.
   preserved or the apply aborts cleanly, plus a broad batch of review fixes across the
   app (input handling, path guards, MSRV 1.88).
 
-### Stable (`main`)
+> **Why 1.0.0 and not 0.1.4.** This release changes the library target's API
+> (`apply::apply_theme` takes a base theme, `theme::Theme` gained `raw_extras`,
+> `starship::StarshipPreset` holds `Cow<'static, str>`). In a `0.x` crate Cargo treats
+> the *minor* as the compatibility boundary, so `^0.1.3` would have picked up a `0.1.4`
+> that no longer compiles for it. Leaving `0.x` puts hauntty on ordinary semver —
+> `1.0.1` for fixes, `1.1.0` for additions, `2.0.0` for breaks — and release candidates
+> continue as `vX.Y.Z-rc.N` pre-releases.
+>
+> The published library target (`hauntty` as a crate dependency) exists to serve the
+> binary and the integration tests; it carries **no API stability guarantee** and may
+> change in any release. Depend on the `hauntty` binary, not the lib.
+
+### Earlier releases
 
 - **v0.1.3** — fetch, preview, and apply Starship presets from the full
   [official catalog](https://starship.rs/presets/), beyond the bundled eight.
@@ -240,6 +277,10 @@ prompt without leaving hauntty:
 - **Preset browser** — browse and preview 8 curated official presets (Nerd Font
   Symbols, No Nerd Fonts, Tokyo Night, Pastel Powerline, Gruvbox Rainbow, Pure,
   Bracketed Segments, Plain Text ASCII) with a live TOML preview.
+- **Fetch the full catalog** — press `f` to pull every official preset. The listing is
+  pinned to the release tag matching your installed `starship --version`, so a fetched
+  preset never references a module your binary doesn't have yet. Without Starship
+  installed (or if the tag is missing upstream) it falls back to the repo's `main`.
 - **Safe apply** — writes `~/.config/starship.toml` with a timestamped backup
   (`starship.toml.bak.<timestamp>`) created automatically.
 - **Links** — docs at [starship.rs](https://starship.rs) and the full presets catalog
@@ -261,8 +302,12 @@ theme file installed on your machine and asserts byte-for-byte equality.
 Cutting a release is one command ([`scripts/release.sh`](scripts/release.sh)):
 
 ```sh
-scripts/release.sh 0.1.1     # or: patch | minor | major
+scripts/release.sh 1.1.0     # or: patch | minor | major | final
 ```
+
+`final` drops a pre-release suffix (`1.1.0-rc.3` → `1.1.0`) — the normal way to ship an
+RC that has held up. Bumping `patch` from a pre-release is refused, since `1.1.0-rc.3`
+sorts *below* `1.1.0` and would skip the release the RC was previewing.
 
 It verifies a clean, green, up-to-date `main`, bumps the version in `Cargo.toml` and the
 Homebrew formula, commits and pushes the `vX.Y.Z` tag, waits for the release workflow to

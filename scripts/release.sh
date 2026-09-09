@@ -5,6 +5,7 @@
 # Usage:
 #   scripts/release.sh <version>     e.g. scripts/release.sh 0.1.1
 #   scripts/release.sh patch|minor|major   (bump from the current version)
+#   scripts/release.sh final               (drop a -rc.N suffix: 1.2.0-rc.3 -> 1.2.0)
 #
 # What it does:
 #   1. Verifies a clean, green, up-to-date checkout.
@@ -49,15 +50,29 @@ git fetch "$REMOTE" --quiet
 [ "$(git rev-parse HEAD)" = "$(git rev-parse "$REMOTE/main")" ] || die "local main is not in sync with $REMOTE/main"
 
 # --- resolve the target version --------------------------------------------
-current="$(perl -ne 'print $1 if /^version = "(\d+\.\d+\.\d+)"/' Cargo.toml)"
+# Tolerate a pre-release version here (e.g. 1.2.0-rc.3). Cargo.toml on main can
+# carry one when an RC branch lands without a hand bump, and the release still
+# has to be able to read where it is starting from.
+current="$(perl -ne 'print $1 if /^version = "(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)"/' Cargo.toml)"
 [ -n "$current" ] || die "could not read current version from Cargo.toml"
+core="${current%%-*}"          # 1.2.0-rc.3 -> 1.2.0
+pre="${current#"$core"}"       # 1.2.0-rc.3 -> -rc.3   (empty when stable)
 
 arg="${1:-}"
-[ -n "$arg" ] || die "usage: scripts/release.sh <version|patch|minor|major>"
+[ -n "$arg" ] || die "usage: scripts/release.sh <version|patch|minor|major|final>"
 
 case "$arg" in
+  final)
+    [ -n "$pre" ] || die "current version $current is not a pre-release — nothing to finalize"
+    VERSION="$core"
+    ;;
   patch|minor|major)
-    IFS=. read -r MA MI PA <<<"$current"
+    # 1.2.0-rc.3 is *below* 1.2.0, so "patch" from it would skip the very
+    # release the RC was previewing. Make that a stop, not a silent jump.
+    if [ -n "$pre" ] && [ "$arg" = patch ]; then
+      die "current version $current is a pre-release of $core — use 'final' to release $core"
+    fi
+    IFS=. read -r MA MI PA <<<"$core"
     case "$arg" in
       patch) PA=$((PA + 1)) ;;
       minor) MI=$((MI + 1)); PA=0 ;;
@@ -77,8 +92,8 @@ printf 'Releasing \033[1m%s\033[0m -> \033[1m%s\033[0m\n' "$current" "$VERSION"
 
 # --- bump versions ----------------------------------------------------------
 step "Bumping version to $VERSION"
-perl -pi -e "s/^version = \"\d+\.\d+\.\d+\"/version = \"$VERSION\"/" Cargo.toml
-perl -pi -e "s/^(\s*)version \"\d+\.\d+\.\d+\"/\${1}version \"$VERSION\"/" dist/hauntty.rb
+perl -pi -e "s/^version = \"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\"/version = \"$VERSION\"/" Cargo.toml
+perl -pi -e "s/^(\s*)version \"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\"/\${1}version \"$VERSION\"/" dist/hauntty.rb
 cargo update --workspace --quiet
 
 # --- verify green -----------------------------------------------------------
