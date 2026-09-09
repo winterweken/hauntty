@@ -224,12 +224,40 @@ fn handle_customize(app: &mut App, key: KeyEvent) {
     };
     let was_armed = draft.discard_armed;
     draft.discard_armed = false;
+    if let Some(picker) = &mut draft.picker {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => picker.control = picker.control.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => picker.control = (picker.control + 1).min(3),
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('-') => {
+                picker.color = picker.adjusted(-1)
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char('+') | KeyCode::Char('=') => {
+                picker.color = picker.adjusted(1)
+            }
+            KeyCode::Char('1'..='3') => {
+                if let KeyCode::Char(n) = key.code {
+                    picker.step = n as usize - '1' as usize;
+                }
+            }
+            KeyCode::Tab => picker.step = (picker.step + 1) % crate::customize::PICKER_STEPS.len(),
+            KeyCode::BackTab => {
+                picker.step = (picker.step + crate::customize::PICKER_STEPS.len() - 1)
+                    % crate::customize::PICKER_STEPS.len()
+            }
+            KeyCode::Char('r') => picker.color = picker.original,
+            KeyCode::Enter => draft.accept_picker(),
+            KeyCode::Esc | KeyCode::Char('q') => draft.picker = None,
+            _ => {}
+        }
+        return;
+    }
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => draft.selected = draft.selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => {
             draft.selected = (draft.selected + 1).min(crate::customize::COLOR_COUNT - 1)
         }
         KeyCode::Enter => app.edit_custom_color(),
+        KeyCode::Char('p') => draft.open_picker(),
         KeyCode::Char('r') => app.reset_custom_color(),
         KeyCode::Char('s') => app.name_custom_theme(),
         KeyCode::Esc | KeyCode::Char('q') => {

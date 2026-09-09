@@ -157,6 +157,16 @@ Press `Enter` to edit a color as `#RRGGBB` or `#RGB` (`Ctrl-U` clears the field)
 Submitting a color updates the preview; `r` restores that color to its starting
 value. Non-hex color values are preserved, but the preview uses fallbacks for them.
 
+Press `p` to open the terminal color picker. Use `↑ ↓` to select Brightness,
+Red, Green, or Blue, then `← →` (or `- +`) to turn that control Down or Up.
+Choose `1` Fine, `2` Medium, or `3` Coarse steps (1, 8, or 16 out of 255);
+`Tab` also cycles steps. Color ramps and Down/Current/Up swatches accompany the
+live theme preview. `Enter` keeps the color, `Esc` cancels the picker changes,
+and `r` resets the picker to its opening color. Brightness adjusts all three RGB
+channels equally, clamping at 0 and 255. For a default or unmodeled color, the
+picker starts at neutral gray; accepting without a change preserves the original
+value. Hex entry remains available with `Enter` from the color list.
+
 Press `s` and enter a new name to save a custom copy. The copy is selected in
 the theme list; press `Enter` to apply it through the usual confirmation.
 The source theme stays intact, and saving a copy does not change your Ghostty

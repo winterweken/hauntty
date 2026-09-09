@@ -22,6 +22,51 @@ pub const COLOR_KEYS: [&str; 6] = [
 ];
 pub const COLOR_COUNT: usize = COLOR_KEYS.len() + 16;
 
+pub const PICKER_CONTROLS: [&str; 4] = ["Brightness", "Red", "Green", "Blue"];
+pub const PICKER_STEPS: [(&str, i16); 3] = [("Fine", 1), ("Medium", 8), ("Coarse", 16)];
+
+/// A tentative RGB edit. The lossless draft is untouched until acceptance.
+pub struct ColorPicker {
+    pub color: Rgb,
+    pub original: Rgb,
+    pub control: usize,
+    pub step: usize,
+    pub uses_fallback: bool,
+}
+
+impl ColorPicker {
+    pub fn adjusted(&self, direction: i16) -> Rgb {
+        let delta = PICKER_STEPS[self.step].1 * direction;
+        let adjust = |value: u8| (i16::from(value) + delta).clamp(0, 255) as u8;
+        Rgb::new(
+            if self.control <= 1 {
+                adjust(self.color.r)
+            } else {
+                self.color.r
+            },
+            if self.control == 0 || self.control == 2 {
+                adjust(self.color.g)
+            } else {
+                self.color.g
+            },
+            if self.control == 0 || self.control == 3 {
+                adjust(self.color.b)
+            } else {
+                self.color.b
+            },
+        )
+    }
+}
+
+// The general preview parser also accepts alpha hex values. Do not silently
+// drop that extra information when initializing the RGB picker.
+fn editable_rgb(value: &str) -> Option<Rgb> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    matches!(hex.len(), 3 | 6)
+        .then(|| Rgb::parse_hex(value))
+        .flatten()
+}
+
 pub fn label(index: usize) -> String {
     if index < COLOR_KEYS.len() {
         COLOR_KEYS[index].to_string()
@@ -47,6 +92,7 @@ pub struct Draft {
     pub name: String,
     pub selected: usize,
     pub discard_armed: bool,
+    pub picker: Option<ColorPicker>,
     source: ConfigDocument,
     permissions: fs::Permissions,
     edits: BTreeMap<usize, String>,
@@ -69,6 +115,7 @@ impl Draft {
             name: format!("{} Custom", theme.name),
             selected: 0,
             discard_armed: false,
+            picker: None,
             source,
             permissions: fs::metadata(&theme.path)?.permissions(),
             edits: BTreeMap::new(),
@@ -121,12 +168,50 @@ impl Draft {
     }
 
     pub fn preview(&self) -> Theme {
+        let mut doc = self.document();
+        if let Some(picker) = &self.picker {
+            if picker.color != picker.original {
+                let (key, value) = if self.selected < COLOR_KEYS.len() {
+                    (COLOR_KEYS[self.selected], picker.color.to_hex())
+                } else {
+                    (
+                        "palette",
+                        format!(
+                            "{}={}",
+                            self.selected - COLOR_KEYS.len(),
+                            picker.color.to_hex()
+                        ),
+                    )
+                };
+                doc.lines.push(Line::KeyValue(KeyValue::new(key, &value)));
+            }
+        }
         Theme::from_str(
             &self.name,
             ThemeSource::User,
             self.source.path.clone(),
-            &self.document().render(),
+            &doc.render(),
         )
+    }
+
+    pub fn open_picker(&mut self) {
+        let color = editable_rgb(&self.value(self.selected));
+        let original = color.unwrap_or(Rgb::new(128, 128, 128));
+        self.picker = Some(ColorPicker {
+            color: original,
+            original,
+            control: 0,
+            step: 1,
+            uses_fallback: color.is_none(),
+        });
+    }
+
+    pub fn accept_picker(&mut self) {
+        if let Some(picker) = self.picker.take() {
+            if picker.color != picker.original {
+                self.edits.insert(self.selected, picker.color.to_hex());
+            }
+        }
     }
 
     pub fn set_color(&mut self, index: usize, input: &str) -> Result<()> {
@@ -295,6 +380,165 @@ mod tests {
         );
         crate::event::handle_event(app, Event::Paste(text.into()));
         key(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn picker_previews_adjustments_and_accepts_without_writing_files() {
+        let source =
+            "# keep\r\nbackground = #000000\r\nbackground  = #102030\r\npalette = 1=red\r\n";
+        let mut f = fixture("picker", source, "theme = Base\n");
+        let app = &mut f.app;
+        key(app, KeyCode::Char('c'));
+        key(app, KeyCode::Char('p'));
+        key(app, KeyCode::Right); // Medium brightness: +8 per channel.
+        let draft = app.customize.as_ref().unwrap();
+        assert_eq!(draft.preview().background, Some(Rgb::new(24, 40, 56)));
+        assert_eq!(draft.document().render(), source);
+        assert!(!draft.dirty());
+
+        key(app, KeyCode::Char('1'));
+        key(app, KeyCode::Left); // Fine brightness: -1.
+        key(app, KeyCode::Down); // Red.
+        key(app, KeyCode::Right);
+        key(app, KeyCode::Down); // Green.
+        key(app, KeyCode::Char('3'));
+        key(app, KeyCode::Char('+')); // Coarse: +16.
+        key(app, KeyCode::Down); // Blue.
+        key(app, KeyCode::Tab); // Wrap to fine.
+        key(app, KeyCode::Char('-'));
+        assert_eq!(
+            app.customize.as_ref().unwrap().preview().background,
+            Some(Rgb::new(24, 55, 54))
+        );
+
+        for (width, height) in [(120, 32), (80, 24), (30, 10), (1, 1)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| crate::ui::render(frame, app))
+                .unwrap();
+            if width >= 80 {
+                let text = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>();
+                for label in [
+                    "color picker",
+                    "Brightness",
+                    "Red",
+                    "Green",
+                    "Blue",
+                    "Down",
+                    "Current",
+                    "Up",
+                    "Fine",
+                    "Medium",
+                    "Coarse",
+                    "Enter keep",
+                    "Esc cancel",
+                ] {
+                    assert!(text.contains(label), "missing {label} at {width}x{height}");
+                }
+                assert!(terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .any(|cell| cell.bg == Rgb::new(24, 55, 54).to_ratatui()));
+            }
+        }
+        key(app, KeyCode::Enter);
+        let draft = app.customize.as_ref().unwrap();
+        assert!(draft.picker.is_none());
+        assert_eq!(
+            draft.document().render(),
+            source.replace("#102030", "#183736")
+        );
+        assert_eq!(
+            fs::read_to_string(f.dir.join("bundled/Base")).unwrap(),
+            source
+        );
+        assert_eq!(
+            fs::read_to_string(f.dir.join("config")).unwrap(),
+            "theme = Base\n"
+        );
+        assert!(!f.dir.join("themes").exists());
+    }
+
+    #[test]
+    fn picker_cancel_reset_and_unchanged_accept_preserve_raw_values_and_prior_edits() {
+        let source = "background = #ABC\nforeground = red\ncursor-color = #12345678\nselection-foreground = cell-foreground\npalette = 0=#abcd\n";
+        let mut f = fixture("picker-preserve", source, "");
+        let app = &mut f.app;
+        app.start_customize();
+        for index in [0, 1, 2, 3, 5, 6] {
+            app.customize.as_mut().unwrap().selected = index;
+            key(app, KeyCode::Char('p'));
+            assert_eq!(
+                app.customize
+                    .as_ref()
+                    .unwrap()
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .uses_fallback,
+                index != 0
+            );
+            key(app, KeyCode::Enter);
+            assert_eq!(app.customize.as_ref().unwrap().document().render(), source);
+            key(app, KeyCode::Char('p'));
+            key(app, KeyCode::Right);
+            key(app, KeyCode::Esc);
+            assert_eq!(app.mode, Mode::Customize);
+            assert_eq!(app.customize.as_ref().unwrap().document().render(), source);
+            key(app, KeyCode::Char('p'));
+            key(app, KeyCode::Left);
+            key(app, KeyCode::Char('r'));
+            key(app, KeyCode::Enter);
+            assert!(!app.customize.as_ref().unwrap().dirty());
+        }
+        app.customize
+            .as_mut()
+            .unwrap()
+            .set_color(6, "#123456")
+            .unwrap();
+        key(app, KeyCode::Char('p'));
+        key(app, KeyCode::Right);
+        key(app, KeyCode::Esc);
+        assert_eq!(app.customize.as_ref().unwrap().value(6), "#123456");
+        key(app, KeyCode::Char('p'));
+        key(app, KeyCode::Right);
+        key(app, KeyCode::Enter);
+        assert_eq!(
+            app.customize.as_ref().unwrap().preview().palette[0],
+            Some(Rgb::new(26, 60, 94))
+        );
+        key(app, KeyCode::Char('r'));
+        assert_eq!(app.customize.as_ref().unwrap().document().render(), source);
+    }
+
+    #[test]
+    fn picker_clamps_channels_and_leaves_unselected_channels_unchanged() {
+        let mut picker = ColorPicker {
+            color: Rgb::new(0, 128, 255),
+            original: Rgb::new(0, 128, 255),
+            control: 0,
+            step: 2,
+            uses_fallback: false,
+        };
+        assert_eq!(picker.adjusted(-1), Rgb::new(0, 112, 239));
+        assert_eq!(picker.adjusted(1), Rgb::new(16, 144, 255));
+        picker.control = 1;
+        assert_eq!(picker.adjusted(-1), picker.color);
+        assert_eq!(picker.adjusted(1), Rgb::new(16, 128, 255));
+        picker.control = 2;
+        assert_eq!(picker.adjusted(-1), Rgb::new(0, 112, 255));
+        picker.control = 3;
+        assert_eq!(picker.adjusted(1), picker.color);
+        assert_eq!(picker.adjusted(-1), Rgb::new(0, 128, 239));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Top-level TUI rendering.
 
+mod color_picker;
 mod preview;
 mod tools;
 
@@ -171,6 +172,11 @@ fn render_themes(f: &mut Frame, area: Rect, app: &App) {
 fn render_customize(f: &mut Frame, area: Rect, draft: &crate::customize::Draft) {
     let cols =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
+    if let Some(picker) = &draft.picker {
+        color_picker::render(f, cols[0], draft, picker);
+        preview::render(f, cols[1], &draft.preview());
+        return;
+    }
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(cols[0]);
     let items: Vec<ListItem> = (0..crate::customize::COLOR_COUNT)
         .map(|index| {
@@ -206,7 +212,7 @@ fn render_customize(f: &mut Frame, area: Rect, draft: &crate::customize::Draft) 
         rows[0],
         &mut state,
     );
-    f.render_widget(Paragraph::new("↑↓ move · Enter edit · r reset color\ns save copy · Esc back\nHex preview; other color values are preserved.").fg(MUTED), rows[1]);
+    f.render_widget(Paragraph::new("↑↓ move · Enter hex · p color picker\nr reset color · s save copy · Esc back\nHex preview; other values are preserved.").fg(MUTED), rows[1]);
     preview::render(f, cols[1], &draft.preview());
 }
 
@@ -301,9 +307,24 @@ fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
         (_, Mode::Confirm) => &[("y", "apply"), ("e", "edit name"), ("n/esc", "cancel")],
         (_, Mode::Input) => &[("type", "value"), ("↵", "set"), ("esc", "cancel")],
         (_, Mode::ToolInstall) => &[("y", "install"), ("n/esc", "cancel"), ("↑↓", "scroll")],
+        (_, Mode::Customize)
+            if app
+                .customize
+                .as_ref()
+                .is_some_and(|draft| draft.picker.is_some()) =>
+        {
+            &[
+                ("↑↓", "control"),
+                ("←/→", "Down/Up"),
+                ("1/2/3", "step"),
+                ("↵", "keep"),
+                ("esc", "cancel"),
+            ]
+        }
         (_, Mode::Customize) => &[
             ("↑↓", "move"),
-            ("↵", "edit"),
+            ("↵", "hex"),
+            ("p", "picker"),
             ("r", "reset"),
             ("s", "save copy"),
             ("esc", "back"),
