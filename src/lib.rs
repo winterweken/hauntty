@@ -10,6 +10,7 @@ pub mod paths;
 pub mod settings;
 pub mod starship;
 pub mod theme;
+pub mod tools;
 
 #[cfg(feature = "import-iterm")]
 pub mod import;

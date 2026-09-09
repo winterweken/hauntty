@@ -250,6 +250,7 @@ dependencies = [
  "plist",
  "ratatui",
  "serde_json",
+ "signal-hook",
  "thiserror 2.0.19",
  "ureq",
 ]

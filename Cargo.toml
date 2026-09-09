@@ -22,6 +22,7 @@ online = ["dep:ureq", "dep:serde_json"]
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
+signal-hook = "0.3"
 anyhow = "1"
 thiserror = "2"
 nucleo-matcher = "0.3"

@@ -20,6 +20,7 @@ pub enum Tab {
     Themes,
     Settings,
     Starship,
+    Tools,
 }
 
 /// The current interaction mode (drives which overlay/handler is active).
@@ -29,6 +30,8 @@ pub enum Mode {
     Filter,
     Confirm,
     Input,
+    Customize,
+    ToolInstall,
     Help,
     #[cfg(feature = "online")]
     Fetch,
@@ -59,6 +62,8 @@ pub struct ConfirmState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputPurpose {
+    CustomColor(usize),
+    CustomName,
     /// Edit a Ghostty setting by its config key.
     Setting(String),
     #[cfg(feature = "import-iterm")]
@@ -134,6 +139,10 @@ pub struct App {
     pub toast: Option<Toast>,
     pub confirm: Option<ConfirmState>,
     pub input: Option<InputState>,
+    pub customize: Option<crate::customize::Draft>,
+    pub tools: crate::tool_setup::ToolsState,
+    #[cfg(feature = "import-iterm")]
+    pub import_browser: Option<crate::import_path::Browser>,
     #[cfg(feature = "online")]
     pub fetch: Option<FetchState>,
     /// Receiver for the in-flight background network request, if any.
@@ -194,6 +203,10 @@ impl App {
             toast: None,
             confirm: None,
             input: None,
+            customize: None,
+            tools: crate::tool_setup::ToolsState::new(),
+            #[cfg(feature = "import-iterm")]
+            import_browser: None,
             #[cfg(feature = "online")]
             fetch: None,
             #[cfg(feature = "online")]
@@ -394,8 +407,17 @@ impl App {
     }
 
     pub fn cancel_overlay(&mut self) {
+        if self.customize.is_some() && self.mode == Mode::Input {
+            self.input = None;
+            self.mode = Mode::Customize;
+            return;
+        }
         self.confirm = None;
         self.input = None;
+        #[cfg(feature = "import-iterm")]
+        {
+            self.import_browser = None;
+        }
         #[cfg(feature = "online")]
         {
             self.fetch = None;
@@ -763,6 +785,10 @@ impl App {
         });
     }
 
+    pub fn starship_install_running(&self) -> bool {
+        self.starship_install_rx.is_some()
+    }
+
     // ---- input overlay submit -----------------------------------------
 
     pub fn submit_input(&mut self) {
@@ -771,7 +797,15 @@ impl App {
             return;
         };
         self.mode = Mode::Normal;
+        if matches!(
+            input.purpose,
+            InputPurpose::CustomColor(_) | InputPurpose::CustomName
+        ) {
+            self.submit_custom_input(input);
+            return;
+        }
         match input.purpose {
+            InputPurpose::CustomColor(_) | InputPurpose::CustomName => unreachable!(),
             InputPurpose::Setting(key) => {
                 // An empty buffer clears a set key (Ghostty then falls back
                 // to its default); on an unset key it leaves the config
@@ -800,7 +834,12 @@ impl App {
                 }
             }
             #[cfg(feature = "import-iterm")]
-            InputPurpose::ImportPath => self.do_import(&input.buffer),
+            InputPurpose::ImportPath => {
+                if !self.do_import(&input.buffer) {
+                    self.input = Some(input);
+                    self.mode = Mode::Input;
+                }
+            }
         }
     }
 
@@ -809,27 +848,117 @@ impl App {
     #[cfg(feature = "import-iterm")]
     pub fn start_import(&mut self) {
         self.input = Some(InputState {
-            title: "Import .itermcolors — paste a file path, Enter to import".to_string(),
+            title: "Drop a .itermcolors file here, or paste/type its path".to_string(),
             buffer: String::new(),
             purpose: InputPurpose::ImportPath,
         });
         self.mode = Mode::Input;
+        self.import_browser = None;
     }
 
     #[cfg(feature = "import-iterm")]
-    fn do_import(&mut self, path: &str) {
-        let path = shellexpand_tilde(path.trim());
-        match hauntty::import::import_itermcolors(&path, &self.paths.user_theme_dir) {
+    fn do_import(&mut self, path: &str) -> bool {
+        let result = crate::import_path::resolve(path).and_then(|path| {
+            hauntty::import::import_itermcolors(&path, &self.paths.user_theme_dir)
+        });
+        match result {
             Ok(dest) => {
                 let name = dest
                     .file_name()
                     .and_then(|s| s.to_str())
                     .unwrap_or("theme")
                     .to_string();
+                // A stale search can hide the imported file. Reveal it and
+                // select its position in the refreshed display list.
+                self.filter.clear();
                 self.reload_themes();
-                self.toast(ToastKind::Success, format!("Imported '{name}'."));
+                self.theme_selected = self
+                    .filtered
+                    .iter()
+                    .position(|&i| self.themes.ordered[i].path == dest)
+                    .unwrap_or(0);
+                self.tab = Tab::Themes;
+                self.toast(
+                    ToastKind::Success,
+                    format!("Imported '{name}'. Press Enter to apply."),
+                );
+                true
             }
-            Err(e) => self.toast(ToastKind::Error, format!("Import failed: {e:#}")),
+            Err(e) => {
+                self.toast(ToastKind::Error, format!("Import failed: {e:#}"));
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "import-iterm")]
+    pub fn toggle_import_browser(&mut self) {
+        if self.import_browser.take().is_some() {
+            return;
+        }
+        let path = self
+            .input
+            .as_ref()
+            .and_then(|i| crate::import_path::resolve(&i.buffer).ok());
+        let directory = path
+            .and_then(|p| {
+                if p.is_dir() {
+                    Some(p)
+                } else {
+                    p.parent().filter(|p| p.is_dir()).map(|p| p.to_path_buf())
+                }
+            })
+            .or_else(|| dirs::download_dir().filter(|p| p.is_dir()))
+            .or_else(|| dirs::home_dir().filter(|p| p.is_dir()))
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(directory) = directory {
+            self.open_import_directory(&directory);
+        } else {
+            self.toast(ToastKind::Error, "Could not find a directory to browse.");
+        }
+    }
+
+    #[cfg(feature = "import-iterm")]
+    fn open_import_directory(&mut self, path: &std::path::Path) {
+        match crate::import_path::Browser::open(path) {
+            Ok(browser) => self.import_browser = Some(browser),
+            Err(e) => self.toast(ToastKind::Error, format!("Cannot browse: {e:#}")),
+        }
+    }
+
+    #[cfg(feature = "import-iterm")]
+    pub fn import_parent(&mut self) {
+        let parent = self
+            .import_browser
+            .as_ref()
+            .and_then(|b| b.directory.parent())
+            .map(|p| p.to_path_buf());
+        if let Some(parent) = parent {
+            self.open_import_directory(&parent);
+        }
+    }
+
+    #[cfg(feature = "import-iterm")]
+    pub fn choose_import_entry(&mut self) {
+        let entry = self
+            .import_browser
+            .as_ref()
+            .and_then(|b| b.entries.get(b.selected))
+            .map(|e| (e.path.clone(), e.is_dir));
+        if let Some((path, is_dir)) = entry {
+            if is_dir {
+                self.open_import_directory(&path);
+            } else if let Some(path) = path.to_str() {
+                if let Some(input) = &mut self.input {
+                    input.buffer = path.to_string();
+                }
+                self.import_browser = None;
+            } else {
+                self.toast(
+                    ToastKind::Error,
+                    "This filename cannot be displayed as UTF-8.",
+                );
+            }
         }
     }
 
@@ -963,16 +1092,6 @@ fn strip_quotes(s: &str) -> String {
     }
 }
 
-#[cfg(feature = "import-iterm")]
-fn shellexpand_tilde(path: &str) -> std::path::PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    }
-    std::path::PathBuf::from(path)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,6 +1115,185 @@ mod tests {
         std::fs::create_dir_all(&themes).unwrap();
         let paths = Paths::resolve(Some(cfg), Some(themes));
         (App::new(paths).unwrap(), dir)
+    }
+
+    #[cfg(feature = "import-iterm")]
+    const IMPORT_SAMPLE: &str = r#"<?xml version="1.0"?><plist version="1.0"><dict>
+      <key>Background Color</key><dict>
+        <key>Red Component</key><real>0.1</real>
+        <key>Green Component</key><real>0.2</real>
+        <key>Blue Component</key><real>0.3</real>
+      </dict><key>Ansi 0 Color</key><dict>
+        <key>Red Component</key><real>0.0</real>
+        <key>Green Component</key><real>0.0</real>
+        <key>Blue Component</key><real>0.0</real>
+      </dict></dict></plist>"#;
+
+    #[cfg(feature = "import-iterm")]
+    #[test]
+    fn dropped_paths_import_only_on_enter_and_preserve_config() {
+        use crate::event::handle_event;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let config = "# Leave me alone\nfont-size = 16\n";
+        let (mut app, dir) = test_app("import-drop", config);
+        let source = dir.0.join("Ocean's 蓝 Theme.itermcolors");
+        std::fs::write(&source, IMPORT_SAMPLE).unwrap();
+        let path = source.to_str().unwrap();
+        let escaped = path.replace(' ', "\\ ").replace('\'', "\\'");
+        for text in [path.to_string(), format!("\"{path}\""), escaped] {
+            app.start_import();
+            handle_event(&mut app, Event::Paste(format!("{text}\r\n")));
+            assert_eq!(app.mode, Mode::Input);
+            assert_eq!(app.input.as_ref().unwrap().buffer, text);
+            handle_event(
+                &mut app,
+                Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            );
+            assert_eq!(app.mode, Mode::Normal, "{:?}", app.toast);
+            assert_eq!(app.toast.as_ref().unwrap().kind, ToastKind::Success);
+            assert!(app.paths.user_theme_dir.join("Ocean's 蓝 Theme").is_file());
+        }
+        assert_eq!(std::fs::read_to_string(&app.paths.config).unwrap(), config);
+        assert_eq!(std::fs::read_to_string(source).unwrap(), IMPORT_SAMPLE);
+    }
+
+    #[cfg(feature = "import-iterm")]
+    #[test]
+    fn import_reveals_and_selects_theme_in_refreshed_list() {
+        let config = "# Keep the current theme until explicitly applied\ntheme = Existing\n";
+        let (mut app, dir) = test_app("import-selection", config);
+        let bundled = dir.0.join("bundled");
+        // Keep this test independent of themes installed on the host.
+        app.paths.bundled_theme_dirs = vec![bundled.clone()];
+        for name in ["Existing", "Zebra"] {
+            std::fs::write(
+                bundled.join(name),
+                "background = #ffffff\npalette = 0=#ffffff\n",
+            )
+            .unwrap();
+        }
+        let source = dir.0.join("Zebra.itermcolors");
+        std::fs::write(&source, IMPORT_SAMPLE).unwrap();
+        for filter in ["", "Zebra", "Existing"] {
+            app.filter = filter.to_string();
+            app.reload_themes();
+            app.theme_selected = 0;
+            app.start_import();
+            app.input.as_mut().unwrap().buffer = source.to_string_lossy().into_owned();
+            app.submit_input();
+
+            assert_eq!(app.mode, Mode::Normal);
+            assert_eq!(app.tab, Tab::Themes);
+            assert!(app.filter.is_empty());
+            assert_eq!(app.theme_selected, 1);
+            let selected = app.current_theme().expect("import is selected immediately");
+            assert_eq!(selected.name, "Zebra");
+            assert_eq!(selected.source, hauntty::theme::ThemeSource::User);
+            assert_eq!(selected.path, app.paths.user_theme_dir.join("Zebra"));
+            assert_eq!(
+                selected.background,
+                Some(hauntty::theme::Rgb::new(26, 51, 77))
+            );
+            assert_eq!(app.themes.len(), 2, "reimport replaces the same theme");
+            assert_eq!(std::fs::read_to_string(&app.paths.config).unwrap(), config);
+        }
+    }
+
+    #[cfg(feature = "import-iterm")]
+    #[test]
+    fn import_failure_keeps_path_for_correction() {
+        use crate::event::handle_event;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, dir) = test_app("import-retry", "");
+        app.start_import();
+        let missing = format!("'{}'", dir.0.join("missing.itermcolors").display());
+        handle_event(&mut app, Event::Paste(missing.clone()));
+        app.submit_input();
+        assert_eq!(app.mode, Mode::Input);
+        assert_eq!(app.input.as_ref().unwrap().buffer, missing);
+        assert_eq!(app.toast.as_ref().unwrap().kind, ToastKind::Error);
+        handle_event(
+            &mut app,
+            Event::Key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL)),
+        );
+        assert!(app.input.as_ref().unwrap().buffer.is_empty());
+        let source = dir.0.join("Fixed.itermcolors");
+        std::fs::write(&source, IMPORT_SAMPLE).unwrap();
+        handle_event(&mut app, Event::Paste(format!("'{}'", source.display())));
+        app.submit_input();
+        assert_eq!(app.toast.as_ref().unwrap().kind, ToastKind::Success);
+    }
+
+    #[cfg(feature = "import-iterm")]
+    #[test]
+    fn optional_browser_selects_file_without_importing() {
+        use crate::event::handle_event;
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let (mut app, dir) = test_app("import-browser", "");
+        let folder = dir.0.join("Downloads");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("Ocean.itermcolors"), IMPORT_SAMPLE).unwrap();
+        std::fs::write(folder.join("ignore.txt"), "ignored").unwrap();
+        app.start_import();
+        app.input.as_mut().unwrap().buffer = folder.to_string_lossy().into_owned();
+        handle_event(
+            &mut app,
+            Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        );
+        let browser = app.import_browser.as_ref().unwrap();
+        assert_eq!(browser.entries.len(), 2); // parent and theme
+        assert!(browser.entries[0].is_dir);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
+        handle_event(
+            &mut app,
+            Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        );
+        handle_event(
+            &mut app,
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        assert!(app.import_browser.is_none());
+        assert_eq!(app.mode, Mode::Input);
+        assert!(!app.paths.user_theme_dir.join("Ocean").exists());
+        terminal.draw(|f| crate::ui::render(f, &app)).unwrap();
+        app.submit_input();
+        assert!(app.paths.user_theme_dir.join("Ocean").is_file());
+
+        app.start_import();
+        app.input.as_mut().unwrap().buffer = folder.to_string_lossy().into_owned();
+        app.toggle_import_browser();
+        app.import_parent();
+        assert_eq!(
+            app.import_browser.as_ref().unwrap().directory,
+            std::fs::canonicalize(&dir.0).unwrap()
+        );
+        app.cancel_overlay();
+        assert!(app.import_browser.is_none());
+        assert!(app.input.is_none());
+    }
+
+    #[test]
+    fn paste_is_text_and_never_a_shortcut_or_submission() {
+        use crate::event::handle_event;
+        use crossterm::event::Event;
+        let (mut app, _dir) = test_app("paste-text", "font-family = Menlo\n");
+        handle_event(&mut app, Event::Paste("qys".into()));
+        assert!(!app.should_quit);
+        assert!(!app.dirty);
+        app.tab = Tab::Settings;
+        app.activate_setting();
+        handle_event(&mut app, Event::Paste(" Mono\n".into()));
+        assert_eq!(app.input.as_ref().unwrap().buffer, "Menlo Mono");
+        assert_eq!(app.mode, Mode::Input);
+        handle_event(&mut app, Event::Paste("first\nsecond".into()));
+        assert_eq!(app.input.as_ref().unwrap().buffer, "Menlo Mono");
+        app.cancel_overlay();
+        app.mode = Mode::Filter;
+        app.tab = Tab::Themes;
+        handle_event(&mut app, Event::Paste("Ocean".into()));
+        assert_eq!(app.filter, "Ocean");
     }
 
     #[test]

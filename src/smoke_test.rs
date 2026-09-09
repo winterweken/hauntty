@@ -63,11 +63,40 @@ fn renders_and_handles_input_without_panicking() {
     assert!(app.dirty);
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
-    // Move to Starship tab, then back to Themes tab.
+    // Move through Starship and Tools, then back to Themes.
     handle_key(&mut app, key(KeyCode::Tab));
     assert_eq!(app.tab, Tab::Starship);
     terminal.draw(|f| ui::render(f, &app)).unwrap();
 
+    handle_key(&mut app, key(KeyCode::Tab));
+    assert_eq!(app.tab, Tab::Tools);
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+    // Only explicit y queues installation; tests never execute installers.
+    app.tools.confirmation = Some(hauntty::tools::homebrew_plan());
+    app.mode = Mode::ToolInstall;
+    for (width, height) in [(120, 32), (80, 24), (30, 10), (1, 1)] {
+        let mut small = Terminal::new(TestBackend::new(width, height)).unwrap();
+        small.draw(|f| ui::render(f, &app)).unwrap();
+    }
+    crate::event::handle_event(&mut app, crossterm::event::Event::Paste("y\n".into()));
+    handle_key(&mut app, key(KeyCode::Enter));
+    assert!(app.tools.pending.is_none());
+    handle_key(&mut app, key(KeyCode::Esc));
+    assert!(app.tools.confirmation.is_none());
+    assert_eq!(app.mode, Mode::Normal);
+    app.tools.confirmation = Some(hauntty::tools::homebrew_plan());
+    app.mode = Mode::ToolInstall;
+    handle_key(&mut app, key(KeyCode::Char('y')));
+    assert!(app.tools.pending.take().is_some());
+    assert!(app.dirty, "install handoff must retain unsaved settings");
+    app.finish_tool_install(Err(anyhow::anyhow!("simulated interruption")));
+    assert!(app.dirty);
+    assert!(app
+        .tools
+        .last_result
+        .as_ref()
+        .unwrap()
+        .contains("simulated interruption"));
     handle_key(&mut app, key(KeyCode::Tab));
     assert_eq!(app.tab, Tab::Themes);
     handle_key(&mut app, key(KeyCode::Char('/')));

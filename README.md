@@ -27,6 +27,9 @@ write.
 - **Import iTerm2 `.itermcolors`** files, converted to Ghostty themes.
 - **Fetch more themes** on demand from the upstream
   [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) catalog.
+- **Terminal tool setup** — install lazydocker, Midnight Commander, lazygit,
+  tmux, fzf, ripgrep, bat, zoxide, Git, and Docker from the Tools tab, with
+  dependency handling and setup notes.
 - **Safe by construction** — surgical, comment-preserving edits; atomic writes; a
   timestamped `config.bak.*` before every change; your current inline colors are saved
   as a named theme before switching, so nothing is ever lost.
@@ -97,19 +100,83 @@ hauntty --themes-dir /path    # add a directory to search for themes
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `1` `2` `3` | switch between Themes, Settings, and Starship |
+| `Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
 | `↑ ↓` / `j k` | move selection |
 | `/` | filter themes or Starship presets |
 | `Enter` | apply theme / edit setting / apply Starship preset |
+| `c` | customize the selected theme's colors (Themes) |
 | `← →` / `h l` | change a setting |
 | `i` | import `.itermcolors` (Themes) / install Starship (Starship) |
 | `f` | fetch themes (Themes) / presets (Starship) from the upstream catalogs |
 | `s` | save settings changes |
+| `Enter` / `i` | review installation (Tools); `y` confirms |
+| `r` / `b` | refresh tool status / set up Homebrew (Tools) |
 | `?` | help |
 | `q` | quit |
 
 > **Note:** Ghostty applies config changes on reload. After hauntty writes your
 > config, reload Ghostty with **⌘⇧,** (`cmd+shift+,`) to see the change.
+
+### Set up terminal tools
+
+Press `4` for the Tools tab. Choose a tool to see what it does, whether its
+executable is installed, the install commands, and any remaining setup steps.
+Press `Enter` or `i` to review installation, then `y` to proceed. `Esc` cancels.
+Use `PageUp` / `PageDown` to scroll the details and `r` to refresh detection.
+
+Installers run in the normal terminal so you can see progress and answer
+package-manager or administrator-password prompts. Press `Enter` afterward to
+return to hauntty with your unsaved settings intact. A failed or interrupted
+step stops the remaining commands; completed installations are retained.
+
+Homebrew is supported on macOS and Linux; Linux also supports `apt-get`, `dnf`,
+and `pacman`. If Homebrew is missing, `b` offers its
+[official installer](https://brew.sh/) as a separate confirmed action.
+Package managers resolve library dependencies. hauntty also includes Git for
+lazygit, a pager for bat, and a Docker runtime for lazydocker when missing.
+On Linux without Homebrew, lazydocker and lazygit use their upstream `go install`
+routes, with Go and Git installed as needed, and write to `~/.local/bin`.
+Add that directory to your shell's `PATH` if needed.
+
+Docker Desktop on macOS still needs its first-run setup; Linux Docker needs a
+running service and appropriate user access. An explicit `DOCKER_HOST` or
+`DOCKER_CONTEXT` uses the existing Docker CLI instead of installing a local
+engine. Compose is optional and is not installed separately by this flow.
+See the [lazydocker requirements](https://github.com/jesseduffield/lazydocker#requirements)
+and [Docker setup guide](https://docs.docker.com/engine/install/linux-postinstall/).
+Shell integrations such as zoxide and fzf have instructions in the tool details;
+hauntty does not edit your shell startup files. Installed status checks files,
+not service readiness. Package availability and versions depend on your OS and
+enabled repositories; installer errors remain visible for troubleshooting.
+
+### Customize a theme
+
+Select a theme on the Themes tab and press `c`. Use `↑ ↓` to choose the
+background, foreground, cursor, selection, or one of the 16 ANSI palette colors.
+Press `Enter` to edit a color as `#RRGGBB` or `#RGB` (`Ctrl-U` clears the field).
+Submitting a color updates the preview; `r` restores that color to its starting
+value. Non-hex color values are preserved, but the preview uses fallbacks for them.
+
+Press `s` and enter a new name to save a custom copy. The copy is selected in
+the theme list; press `Enter` to apply it through the usual confirmation.
+The source theme stays intact, and saving a copy does not change your Ghostty
+config. When customizing the active theme, its inline color overrides are
+included. `Esc` leaves the editor, with a second press required to discard edits.
+Font, opacity, padding, and other preferences remain on the Settings tab.
+
+### Import a theme
+
+Press `i` on the Themes tab, then drag a `.itermcolors` file into the terminal
+or paste/type its path. Press `Enter` to import. Paths with spaces, single or
+double quotes, shell-escaped characters, and `~/` are accepted. Import one file
+at a time; an error leaves the path open for correction (`Ctrl-U` clears it).
+After import, the list refreshes, clears any search filter, and selects the new
+theme for preview. Press `Enter` again to apply it.
+
+If you prefer to browse, press `Tab` in the import field. Use `↑ ↓` to select,
+`Enter` to open a folder or choose a file, and `←` to go to the parent folder.
+Choosing a file fills the path; press `Enter` again to import it. `Tab` or `Esc`
+returns from the browser to the path field.
 
 ## What's new
 
