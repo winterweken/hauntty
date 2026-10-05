@@ -111,15 +111,49 @@ impl Theme {
         self.palette.get(i).and_then(|c| *c).unwrap_or(self.fg())
     }
 
-    /// Atomically write this theme to `path` in Ghostty format (temp file in the
-    /// same directory, then rename).
-    pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
+    /// Write the finished theme to a temp file beside `path` (creating the
+    /// directory if needed) and return the temp path. Both save paths start
+    /// here, so the final name is only ever taken by a complete file.
+    fn write_tmp(&self, path: &Path) -> std::io::Result<PathBuf> {
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!(".hauntty.theme.tmp.{}", std::process::id()));
         std::fs::write(&tmp, self.to_ghostty_file())?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        Ok(tmp)
+    }
+
+    /// Atomically write this theme to `path` in Ghostty format (temp file in the
+    /// same directory, then rename).
+    pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
+        let tmp = self.write_tmp(path)?;
+        std::fs::rename(&tmp, path)
+    }
+
+    /// Like [`Theme::save_atomic`], but never replaces an existing filesystem
+    /// entry at `path`; returns [`std::io::ErrorKind::AlreadyExists`] instead.
+    ///
+    /// The finished temp file is hard-linked to `path`. `link(2)` fails with
+    /// `EEXIST` when anything already sits there — including a *dangling*
+    /// symlink, which `exists()` reports as absent — so the claim is atomic
+    /// against a concurrent writer and never clobbers an existing entry. And
+    /// since the name is only ever taken by a complete file, an interrupted
+    /// save cannot leave an empty placeholder behind for a later save to
+    /// refuse and theme discovery to list as a colorless theme.
+    ///
+    /// Filesystems that refuse hard links fall back to [`claim_then_rename`].
+    pub fn save_atomic_new(&self, path: &Path) -> std::io::Result<()> {
+        let tmp = self.write_tmp(path)?;
+        let claimed = match std::fs::hard_link(&tmp, path) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => {
+                claim_then_rename(&tmp, path)
+            }
+            linked => linked,
+        };
+        // After a link `tmp` is a second name for the theme; after a refused
+        // claim it is the unwanted write. Either way it goes. (The fallback
+        // renames it away itself, in which case this is a harmless no-op.)
+        let _ = std::fs::remove_file(&tmp);
+        claimed
     }
 
     /// Serialize to Ghostty theme-file format (`#`-prefixed 6-digit hex).
@@ -149,6 +183,20 @@ impl Theme {
         }
         out
     }
+}
+
+/// Fallback claim for filesystems without hard links (exFAT, some network
+/// mounts): take `path` with `create_new` (`O_CREAT|O_EXCL`), then rename the
+/// finished `tmp` over the placeholder. Unlike the link, this has a window
+/// between the two syscalls in which an empty `path` exists.
+fn claim_then_rename(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    std::fs::rename(tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(path);
+    })
 }
 
 /// A collection of themes, indexed by name, sorted for display.
@@ -340,5 +388,76 @@ mod tests {
         let mut v = vec!["Theme 10", "Theme 2", "3024 Night", "abc", "Abd"];
         v.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(v, vec!["3024 Night", "abc", "Abd", "Theme 2", "Theme 10"]);
+    }
+
+    struct TempDir(PathBuf);
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn temp_dir(tag: &str) -> TempDir {
+        let p = std::env::temp_dir().join(format!("hauntty-theme-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        TempDir(p)
+    }
+
+    fn sample_theme() -> Theme {
+        let mut t = Theme::empty("t", ThemeSource::User, "t".into());
+        t.background = Some(Rgb::new(0x28, 0x2a, 0x36));
+        t.palette[0] = Some(Rgb::new(0x21, 0x22, 0x2c));
+        t
+    }
+
+    /// Sorted entry names of `dir`, to assert no temp file was left behind.
+    fn entries(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn save_atomic_new_writes_finished_file_and_leaves_no_temp() {
+        let dir = temp_dir("new");
+        let dest = dir.0.join("Saved");
+        let theme = sample_theme();
+        theme.save_atomic_new(&dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            theme.to_ghostty_file()
+        );
+        assert_eq!(entries(&dir.0), ["Saved"]);
+    }
+
+    #[test]
+    fn save_atomic_new_refuses_existing_file_and_keeps_it() {
+        let dir = temp_dir("exists");
+        let dest = dir.0.join("Saved");
+        std::fs::write(&dest, "background = 000000\n").unwrap();
+        let err = sample_theme().save_atomic_new(&dest).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            "background = 000000\n"
+        );
+        assert_eq!(entries(&dir.0), ["Saved"]);
+    }
+
+    // `exists()` says a dangling symlink is absent; the link-based claim must
+    // still refuse it, and leave the link itself alone.
+    #[cfg(unix)]
+    #[test]
+    fn save_atomic_new_refuses_dangling_symlink() {
+        let dir = temp_dir("dangling");
+        let dest = dir.0.join("Saved");
+        std::os::unix::fs::symlink(dir.0.join("nowhere"), &dest).unwrap();
+        let err = sample_theme().save_atomic_new(&dest).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(std::fs::symlink_metadata(&dest).unwrap().is_symlink());
+        assert_eq!(entries(&dir.0), ["Saved"]);
     }
 }

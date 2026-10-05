@@ -99,20 +99,20 @@ pub fn download_theme(remote: &RemoteTheme, dest_dir: &Path) -> Result<PathBuf> 
 }
 
 /// List community Starship presets available for download from GitHub.
-pub fn list_remote_starship_presets() -> Result<Vec<RemoteStarshipPreset>> {
-    const STARSHIP_PRESETS_API: &str =
-        "https://api.github.com/repos/starship/starship/contents/docs/public/presets/toml?ref=main";
+///
+/// `git_ref` pins the listing — and the download URLs GitHub derives from it —
+/// to a release tag such as `v1.26.0`, so presets can't reference modules the
+/// installed starship doesn't support yet. `None` lists the default branch.
+///
+/// A pinned ref with no catalog upstream (a build at a not-yet-tagged version,
+/// or a release that predates the presets directory) is an error, not a
+/// fallback to `main`: an unpinned catalog is exactly what may not parse on
+/// that binary. The bundled presets remain available either way.
+pub fn list_remote_starship_presets(git_ref: Option<&str>) -> Result<Vec<RemoteStarshipPreset>> {
+    let response = request_starship_presets(git_ref.unwrap_or("main"))
+        .map_err(|e| catalog_error(git_ref, e))?;
 
-    let body = ureq::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .get(STARSHIP_PRESETS_API)
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", "application/vnd.github+json")
-        .call()
-        .context("requesting Starship presets list from GitHub")?
-        .into_string()
-        .context("reading GitHub response")?;
+    let body = response.into_string().context("reading GitHub response")?;
 
     let json: serde_json::Value = serde_json::from_str(&body).context("parsing GitHub response")?;
     let arr = json
@@ -152,6 +152,57 @@ pub fn list_remote_starship_presets() -> Result<Vec<RemoteStarshipPreset>> {
     Ok(out)
 }
 
+/// Derive the GitHub ref matching an installed starship version line, e.g.
+/// `"starship 1.26.0"` → `"v1.26.0"`. Returns `None` when no `X.Y.Z` version
+/// can be found, so callers can fall back to the default branch.
+pub fn starship_ref_from_version(version_line: &str) -> Option<String> {
+    version_line.split_whitespace().find_map(|token| {
+        let end = token
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(token.len());
+        let version = &token[..end];
+        let parts: Vec<&str> = version.split('.').collect();
+        let is_semver = parts.len() == 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+        is_semver.then(|| format!("v{version}"))
+    })
+}
+
+fn starship_presets_api_url(git_ref: &str) -> String {
+    format!(
+        "https://api.github.com/repos/starship/starship/contents/docs/public/presets/toml?ref={git_ref}"
+    )
+}
+
+fn request_starship_presets(git_ref: &str) -> Result<ureq::Response, Box<ureq::Error>> {
+    ureq::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .get(&starship_presets_api_url(git_ref))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(Box::new)
+}
+
+/// Turn a failed catalog request into the error shown to the user. A 404 for a
+/// pinned ref gets its own message, because the tempting recovery — listing
+/// `main` instead — is the unpinned behavior the pinning exists to prevent.
+fn catalog_error(git_ref: Option<&str>, e: Box<ureq::Error>) -> anyhow::Error {
+    match (git_ref, *e) {
+        (Some(pinned), ureq::Error::Status(404, _)) => anyhow!(
+            "no Starship preset catalog upstream for {pinned}; not falling back to \
+             the unpinned `main` catalog, whose presets may use modules your \
+             installed starship cannot parse"
+        ),
+        (_, other) => {
+            anyhow::Error::new(other).context("requesting Starship presets list from GitHub")
+        }
+    }
+}
+
 /// Download a remote Starship preset's TOML content string.
 pub fn download_starship_preset_content(remote: &RemoteStarshipPreset) -> Result<String> {
     let body = ureq::builder()
@@ -164,4 +215,105 @@ pub fn download_starship_preset_content(remote: &RemoteStarshipPreset) -> Result
         .into_string()
         .context("reading preset body")?;
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ref_from_homebrew_version_line() {
+        assert_eq!(
+            starship_ref_from_version("starship 1.26.0"),
+            Some("v1.26.0".to_string())
+        );
+    }
+
+    #[test]
+    fn ref_from_bare_version() {
+        assert_eq!(
+            starship_ref_from_version("1.26.0"),
+            Some("v1.26.0".to_string())
+        );
+    }
+
+    #[test]
+    fn ref_from_git_describe_suffix_uses_numeric_prefix() {
+        assert_eq!(
+            starship_ref_from_version("starship 1.26.0-17-gabc123"),
+            Some("v1.26.0".to_string())
+        );
+    }
+
+    #[test]
+    fn ref_rejects_missing_version() {
+        assert_eq!(starship_ref_from_version("starship"), None);
+        assert_eq!(starship_ref_from_version(""), None);
+    }
+
+    #[test]
+    fn ref_rejects_incomplete_or_malformed_version() {
+        assert_eq!(starship_ref_from_version("starship 1.26"), None);
+        assert_eq!(starship_ref_from_version("starship 1..26.0"), None);
+    }
+
+    #[test]
+    fn presets_url_pins_ref() {
+        assert_eq!(
+            starship_presets_api_url("v1.26.0"),
+            "https://api.github.com/repos/starship/starship/contents/docs/public/presets/toml?ref=v1.26.0"
+        );
+    }
+
+    #[test]
+    fn presets_url_default_branch() {
+        assert_eq!(
+            starship_presets_api_url("main"),
+            "https://api.github.com/repos/starship/starship/contents/docs/public/presets/toml?ref=main"
+        );
+    }
+
+    fn status_error(code: u16) -> Box<ureq::Error> {
+        let response = ureq::Response::new(code, "Error", "").unwrap();
+        Box::new(ureq::Error::Status(code, response))
+    }
+
+    #[test]
+    fn pinned_404_refuses_unpinned_fallback() {
+        let msg = format!("{:#}", catalog_error(Some("v1.12.0"), status_error(404)));
+        assert!(msg.contains("v1.12.0"), "{msg}");
+        assert!(msg.contains("not falling back"), "{msg}");
+    }
+
+    #[test]
+    fn pinned_non_404_is_a_plain_request_error() {
+        let msg = format!("{:#}", catalog_error(Some("v1.12.0"), status_error(500)));
+        assert!(msg.contains("requesting Starship presets list"), "{msg}");
+        assert!(!msg.contains("not falling back"), "{msg}");
+    }
+
+    #[test]
+    fn unpinned_404_is_a_plain_request_error() {
+        let msg = format!("{:#}", catalog_error(None, status_error(404)));
+        assert!(msg.contains("requesting Starship presets list"), "{msg}");
+    }
+
+    // Live smoke tests — run explicitly with `cargo test -- --ignored`.
+
+    #[test]
+    #[ignore = "hits the GitHub API"]
+    fn live_listing_pins_download_urls_to_ref() {
+        let presets = list_remote_starship_presets(Some("v1.26.0")).unwrap();
+        assert!(!presets.is_empty());
+        assert!(presets
+            .iter()
+            .all(|p| p.download_url.contains("/starship/starship/v1.26.0/")));
+    }
+
+    #[test]
+    #[ignore = "hits the GitHub API"]
+    fn live_listing_refuses_unknown_ref() {
+        let err = list_remote_starship_presets(Some("v99.99.99")).unwrap_err();
+        assert!(format!("{err:#}").contains("not falling back"));
+    }
 }
