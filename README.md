@@ -213,7 +213,13 @@ returns from the browser to the path field.
   released binary — `catppuccin-powerline` gaining `[jj_bookmark]` produced
   `Error in 'StarshipRoot' at 'jj_bookmark': Unknown key` on every prompt. hauntty now
   pins the catalog to the release tag matching your `starship --version`, falling back
-  to `main` only when Starship isn't installed or that tag doesn't exist upstream.
+  to `main` only when Starship isn't installed or its version can't be read. If your
+  version's tag has no catalog upstream, the fetch is refused rather than served from
+  an unpinned branch; the bundled presets stay available.
+- **An interrupted backup save can't leave an empty theme behind.** The theme written
+  before an apply now claims its name with the finished file itself, so a save cut
+  short no longer leaves a colorless placeholder that blocks the name and shows up in
+  the Themes list.
 
 ### v1.0.0
 
@@ -280,7 +286,9 @@ prompt without leaving hauntty:
 - **Fetch the full catalog** — press `f` to pull every official preset. The listing is
   pinned to the release tag matching your installed `starship --version`, so a fetched
   preset never references a module your binary doesn't have yet. Without Starship
-  installed (or if the tag is missing upstream) it falls back to the repo's `main`.
+  installed it falls back to the repo's `main`; if your version's tag has no catalog
+  upstream, the fetch is refused rather than served from an unpinned branch, and the
+  bundled presets stay available.
 - **Safe apply** — writes `~/.config/starship.toml` with a timestamped backup
   (`starship.toml.bak.<timestamp>`) created automatically.
 - **Links** — docs at [starship.rs](https://starship.rs) and the full presets catalog
