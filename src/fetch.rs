@@ -103,19 +103,14 @@ pub fn download_theme(remote: &RemoteTheme, dest_dir: &Path) -> Result<PathBuf> 
 /// `git_ref` pins the listing — and the download URLs GitHub derives from it —
 /// to a release tag such as `v1.26.0`, so presets can't reference modules the
 /// installed starship doesn't support yet. `None` lists the default branch.
+///
+/// A pinned ref with no catalog upstream (a build at a not-yet-tagged version,
+/// or a release that predates the presets directory) is an error, not a
+/// fallback to `main`: an unpinned catalog is exactly what may not parse on
+/// that binary. The bundled presets remain available either way.
 pub fn list_remote_starship_presets(git_ref: Option<&str>) -> Result<Vec<RemoteStarshipPreset>> {
-    let response = match git_ref {
-        // A pinned ref can be missing upstream (e.g. starship built from an
-        // untagged dev version): fall back to the default branch on 404.
-        Some(pinned) => match request_starship_presets(pinned) {
-            Err(e) if matches!(e.as_ref(), ureq::Error::Status(404, _)) => {
-                request_starship_presets("main")
-            }
-            other => other,
-        },
-        None => request_starship_presets("main"),
-    }
-    .context("requesting Starship presets list from GitHub")?;
+    let response = request_starship_presets(git_ref.unwrap_or("main"))
+        .map_err(|e| catalog_error(git_ref, e))?;
 
     let body = response.into_string().context("reading GitHub response")?;
 
@@ -192,6 +187,22 @@ fn request_starship_presets(git_ref: &str) -> Result<ureq::Response, Box<ureq::E
         .map_err(Box::new)
 }
 
+/// Turn a failed catalog request into the error shown to the user. A 404 for a
+/// pinned ref gets its own message, because the tempting recovery — listing
+/// `main` instead — is the unpinned behavior the pinning exists to prevent.
+fn catalog_error(git_ref: Option<&str>, e: Box<ureq::Error>) -> anyhow::Error {
+    match (git_ref, *e) {
+        (Some(pinned), ureq::Error::Status(404, _)) => anyhow!(
+            "no Starship preset catalog upstream for {pinned}; not falling back to \
+             the unpinned `main` catalog, whose presets may use modules your \
+             installed starship cannot parse"
+        ),
+        (_, other) => {
+            anyhow::Error::new(other).context("requesting Starship presets list from GitHub")
+        }
+    }
+}
+
 /// Download a remote Starship preset's TOML content string.
 pub fn download_starship_preset_content(remote: &RemoteStarshipPreset) -> Result<String> {
     let body = ureq::builder()
@@ -262,6 +273,31 @@ mod tests {
         );
     }
 
+    fn status_error(code: u16) -> Box<ureq::Error> {
+        let response = ureq::Response::new(code, "Error", "").unwrap();
+        Box::new(ureq::Error::Status(code, response))
+    }
+
+    #[test]
+    fn pinned_404_refuses_unpinned_fallback() {
+        let msg = format!("{:#}", catalog_error(Some("v1.12.0"), status_error(404)));
+        assert!(msg.contains("v1.12.0"), "{msg}");
+        assert!(msg.contains("not falling back"), "{msg}");
+    }
+
+    #[test]
+    fn pinned_non_404_is_a_plain_request_error() {
+        let msg = format!("{:#}", catalog_error(Some("v1.12.0"), status_error(500)));
+        assert!(msg.contains("requesting Starship presets list"), "{msg}");
+        assert!(!msg.contains("not falling back"), "{msg}");
+    }
+
+    #[test]
+    fn unpinned_404_is_a_plain_request_error() {
+        let msg = format!("{:#}", catalog_error(None, status_error(404)));
+        assert!(msg.contains("requesting Starship presets list"), "{msg}");
+    }
+
     // Live smoke tests — run explicitly with `cargo test -- --ignored`.
 
     #[test]
@@ -276,8 +312,8 @@ mod tests {
 
     #[test]
     #[ignore = "hits the GitHub API"]
-    fn live_listing_falls_back_to_main_on_unknown_ref() {
-        let presets = list_remote_starship_presets(Some("v99.99.99")).unwrap();
-        assert!(!presets.is_empty());
+    fn live_listing_refuses_unknown_ref() {
+        let err = list_remote_starship_presets(Some("v99.99.99")).unwrap_err();
+        assert!(format!("{err:#}").contains("not falling back"));
     }
 }
