@@ -90,18 +90,24 @@ pub fn apply_theme(
             )
         })?;
 
-        if dest.exists() {
-            anyhow::bail!(
-                "a theme named `{safe_name}` already exists at {} — \
-                 choose a different backup name (config not changed)",
-                dest.display()
-            );
-        }
-        backup.save_atomic(&dest).with_context(|| {
-            format!(
-                "saving current colors as theme {} (config not changed)",
-                dest.display()
-            )
+        // Claim the name atomically rather than checking `exists()` first: two
+        // hauntty instances racing on the same backup name must not both pass
+        // the check and have the loser's rename silently eat the winner's
+        // backup, and a dangling symlink at `dest` must be refused, not
+        // replaced.
+        backup.save_atomic_new(&dest).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::anyhow!(
+                    "a theme named `{safe_name}` already exists at {} — \
+                     choose a different backup name (config not changed)",
+                    dest.display()
+                )
+            } else {
+                anyhow::Error::new(e).context(format!(
+                    "saving current colors as theme {} (config not changed)",
+                    dest.display()
+                ))
+            }
         })?;
         backup_theme_path = Some(dest);
     }
@@ -392,6 +398,40 @@ keybind = cmd+d=new_split:right
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         TempDir(p)
+    }
+
+    // A dangling symlink is absent as far as `Path::exists()` is concerned,
+    // so the old check-then-rename would have destroyed the link. The
+    // `create_new` claim refuses it instead.
+    #[cfg(unix)]
+    #[test]
+    fn apply_refuses_backup_over_dangling_symlink() {
+        let dir = temp_dir("dangling");
+        let themes = dir.0.join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        let link = themes.join("My Saved Theme");
+        std::os::unix::fs::symlink(dir.0.join("nowhere"), &link).unwrap();
+        assert!(!link.exists(), "precondition: dangling link looks absent");
+
+        let cfg_path = dir.0.join("config");
+        std::fs::write(&cfg_path, "background = 282a36\n").unwrap();
+        let mut doc = ConfigDocument::load(&cfg_path).unwrap();
+
+        let err = apply_theme(
+            &mut doc,
+            "Tokyo Night",
+            Some("My Saved Theme"),
+            &themes,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+        // The link itself survived, and the config was not touched.
+        assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&cfg_path).unwrap(),
+            "background = 282a36\n"
+        );
     }
 
     #[test]
