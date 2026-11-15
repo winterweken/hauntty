@@ -27,6 +27,9 @@ write.
 - **Import iTerm2 `.itermcolors`** files, converted to Ghostty themes.
 - **Fetch more themes** on demand from the upstream
   [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) catalog.
+- **Terminal tool setup** — install lazydocker, Midnight Commander, lazygit,
+  tmux, fzf, ripgrep, bat, zoxide, Git, and Docker from the Tools tab, with
+  dependency handling and setup notes.
 - **Safe by construction** — surgical, comment-preserving edits; atomic writes; a
   timestamped `config.bak.*` before every change; your current inline colors are saved
   as a named theme before switching, so nothing is ever lost.
@@ -70,11 +73,26 @@ cargo build --release
 > Homebrew, `cargo install hauntty`, and `install.sh` all track the latest **stable**
 > release. Release candidates are published separately — see below.
 
+### Checking for updates
+
+```sh
+hauntty --check-update
+```
+
+Or press `u` inside hauntty. Either compares the running version with the newest
+release published on GitHub for its channel — a stable build looks at stable releases
+only, while a release candidate also sees newer candidates — and says whether there is
+something newer and where to get it. Like every network feature in hauntty, it runs
+only when you ask, and it never installs anything.
+
 ### Release candidates
 
-Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev)
-and ships as `vX.Y.Z-rc.N` **pre-releases** for testing before it reaches `main` and the
-stable channels. When one is open, grab the tarball for your platform from the
+Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev).
+When a release is being prepared, `dev` is promoted to a `dev-rc` branch and cut as a
+`vX.Y.Z-rc.N` **pre-release** for testing; once it holds up, `dev-rc` merges to `main`
+and becomes the stable release. So the path is `dev` → `dev-rc` → `main`.
+
+While a release candidate is open, grab the tarball for your platform from the
 [releases page](https://github.com/winterweken/hauntty/releases) — for example, on
 Apple Silicon:
 
@@ -82,7 +100,8 @@ Apple Silicon:
 gh release download vX.Y.Z-rc.N --repo winterweken/hauntty --pattern "*aarch64-apple-darwin*"
 ```
 
-Each asset ships with a `.sha256` checksum.
+Each asset ships with a `.sha256` checksum. See [What's new](#whats-new) for the
+current release candidate and what it contains.
 
 ## Usage
 
@@ -90,27 +109,143 @@ Each asset ships with a `.sha256` checksum.
 hauntty                       # manage the default Ghostty config
 hauntty --config /path/config # operate on a specific config file
 hauntty --themes-dir /path    # add a directory to search for themes
+hauntty --check-update        # ask GitHub whether a newer release is published
 ```
 
 ### Keybindings
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `1` `2` `3` | switch between Themes, Settings, and Starship |
+| `Tab` / `Shift-Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
 | `↑ ↓` / `j k` | move selection |
+| `g` `G` / `Home` `End` | jump to the first / last item in a list |
+| `PgUp` `PgDn` | move several rows at once (Themes, Settings, Starship) / scroll the details pane (Tools) |
 | `/` | filter themes or Starship presets |
 | `Enter` | apply theme / edit setting / apply Starship preset |
+| `c` | customize the selected theme's colors (Themes) |
+| `p` | open the RGB color picker (theme customizer) |
 | `← →` / `h l` | change a setting |
 | `i` | import `.itermcolors` (Themes) / install Starship (Starship) |
 | `f` | fetch themes (Themes) / presets (Starship) from the upstream catalogs |
+| `u` | check GitHub for a newer hauntty release |
 | `s` | save settings changes |
+| `Enter` / `i` | review installation (Tools); `y` confirms |
+| `r` / `b` | refresh tool status / set up Homebrew (Tools) |
 | `?` | help |
 | `q` | quit |
 
 > **Note:** Ghostty applies config changes on reload. After hauntty writes your
 > config, reload Ghostty with **⌘⇧,** (`cmd+shift+,`) to see the change.
 
+### Set up terminal tools
+
+Press `4` for the Tools tab. Choose a tool to see what it does, whether its
+executable is installed, the install commands, and any remaining setup steps.
+Press `Enter` or `i` to review installation, then `y` to proceed. `Esc` cancels.
+Use `PageUp` / `PageDown` to scroll the details and `r` to refresh detection.
+
+Installers run in the normal terminal so you can see progress and answer
+package-manager or administrator-password prompts. Press `Enter` afterward to
+return to hauntty with your unsaved settings intact. A failed or interrupted
+step stops the remaining commands; completed installations are retained.
+
+Homebrew is supported on macOS and Linux; Linux also supports `apt-get`, `dnf`,
+and `pacman`. If Homebrew is missing, `b` offers its
+[official installer](https://brew.sh/) as a separate confirmed action.
+Package managers resolve library dependencies. hauntty also includes Git for
+lazygit, a pager for bat, and a Docker runtime for lazydocker when missing.
+On Linux without Homebrew, lazydocker and lazygit use their upstream `go install`
+routes, with Go and Git installed as needed, and write to `~/.local/bin`.
+Add that directory to your shell's `PATH` if needed.
+
+Docker Desktop on macOS still needs its first-run setup; Linux Docker needs a
+running service and appropriate user access. An explicit `DOCKER_HOST` or
+`DOCKER_CONTEXT` uses the existing Docker CLI instead of installing a local
+engine. Compose is optional and is not installed separately by this flow.
+See the [lazydocker requirements](https://github.com/jesseduffield/lazydocker#requirements)
+and [Docker setup guide](https://docs.docker.com/engine/install/linux-postinstall/).
+Shell integrations such as zoxide and fzf have instructions in the tool details;
+hauntty does not edit your shell startup files. Installed status checks files,
+not service readiness. Package availability and versions depend on your OS and
+enabled repositories; installer errors remain visible for troubleshooting.
+
+### Customize a theme
+
+Select a theme on the Themes tab and press `c`. Use `↑ ↓` to choose the
+background, foreground, cursor, selection, or one of the 16 ANSI palette colors.
+Press `Enter` to edit a color as `#RRGGBB` or `#RGB` (`Ctrl-U` clears the field).
+Submitting a color updates the preview; `r` restores that color to its starting
+value. Non-hex color values are preserved, but the preview uses fallbacks for them.
+
+Press `p` to open the terminal color picker. Use `↑ ↓` to select Brightness,
+Red, Green, or Blue, then `← →` (or `- +`) to turn that control Down or Up.
+Choose `1` Fine, `2` Medium, or `3` Coarse steps (1, 8, or 16 out of 255);
+`Tab` also cycles steps. Color ramps and Down/Current/Up swatches accompany the
+live theme preview. `Enter` keeps the color, `Esc` cancels the picker changes,
+and `r` resets the picker to its opening color. Brightness adjusts all three RGB
+channels equally, clamping at 0 and 255. For a default or unmodeled color, the
+picker starts at neutral gray; accepting without a change preserves the original
+value. Hex entry remains available with `Enter` from the color list.
+
+Press `s` and enter a new name to save a custom copy. The copy is selected in
+the theme list; press `Enter` to apply it through the usual confirmation.
+The source theme stays intact, and saving a copy does not change your Ghostty
+config. When customizing the active theme, its inline color overrides are
+included. `Esc` leaves the editor, with a second press required to discard edits.
+Font, opacity, padding, and other preferences remain on the Settings tab.
+
+### Import a theme
+
+Press `i` on the Themes tab, then drag a `.itermcolors` file into the terminal
+or paste/type its path. Press `Enter` to import. Paths with spaces, single or
+double quotes, shell-escaped characters, and `~/` are accepted. Import one file
+at a time; an error leaves the path open for correction (`Ctrl-U` clears it).
+After import, the list refreshes, clears any search filter, and selects the new
+theme for preview. Press `Enter` again to apply it.
+
+If you prefer to browse, press `Tab` in the import field. Use `↑ ↓` to select,
+`Enter` to open a folder or choose a file, and `←` to go to the parent folder.
+Choosing a file fills the path; press `Enter` again to import it. `Tab` or `Esc`
+returns from the browser to the path field.
+
 ## What's new
+
+### v1.1.0
+
+- **Customize a theme's colors in place** — press `c` on the Themes tab to edit the
+  background, foreground, cursor, selection, and all 16 ANSI colors against the live
+  preview, then `s` to save the result as a new named theme. The source theme and your
+  config are left untouched.
+- **Interactive RGB color picker** — press `p` while customizing to dial a color in
+  with Brightness / Red / Green / Blue controls, three step sizes, and
+  Down / Current / Up swatches, instead of typing hex by hand.
+- **Tools tab** — detect and install lazydocker, Midnight Commander, lazygit, tmux,
+  fzf, ripgrep, bat, zoxide, Git, and Docker, with dependency handling, per-tool setup
+  notes, and a confirmation step before any installer runs.
+- **Browse for the file to import** — the `.itermcolors` import prompt now includes a
+  file browser (`Tab`), alongside drag-and-drop and typed paths.
+- **Starship presets now match your installed Starship.** Presets were listed from the
+  starship repo's `main` branch, so they could reference modules newer than any
+  released binary — `catppuccin-powerline` gaining `[jj_bookmark]` produced
+  `Error in 'StarshipRoot' at 'jj_bookmark': Unknown key` on every prompt. hauntty now
+  pins the catalog to the release tag matching your `starship --version`, falling back
+  to `main` only when Starship isn't installed or its version can't be read. If your
+  version's tag has no catalog upstream, the fetch is refused rather than served from
+  an unpinned branch; the bundled presets stay available.
+- **An interrupted backup save can't leave an empty theme behind.** The theme written
+  before an apply now claims its name with the finished file itself, so a save cut
+  short no longer leaves a colorless placeholder that blocks the name and shows up in
+  the Themes list.
+- **Check for updates** — press `u`, or run `hauntty --check-update`, to ask GitHub
+  whether a newer release is published for your channel (stable, or release candidates
+  if you're running one). Explicit only: hauntty still never touches the network on
+  its own, and it never installs anything.
+- **A sharper TUI.** A green `●` marks the theme your config uses and every setting
+  changed from its default; list titles show your position (`themes 1/822`) and long
+  lists get a scrollbar; below 72 columns the preview stacks under the list; `g`/`G`,
+  `Home`/`End` and `PgUp`/`PgDn` work on every list; the preview's border reports
+  dark/light and the WCAG contrast ratio; and borders, selection and cursor styling are
+  consistent across every tab and overlay.
 
 ### v1.0.0
 
@@ -174,6 +309,12 @@ prompt without leaving hauntty:
 - **Preset browser** — browse and preview 8 curated official presets (Nerd Font
   Symbols, No Nerd Fonts, Tokyo Night, Pastel Powerline, Gruvbox Rainbow, Pure,
   Bracketed Segments, Plain Text ASCII) with a live TOML preview.
+- **Fetch the full catalog** — press `f` to pull every official preset. The listing is
+  pinned to the release tag matching your installed `starship --version`, so a fetched
+  preset never references a module your binary doesn't have yet. Without Starship
+  installed it falls back to the repo's `main`; if your version's tag has no catalog
+  upstream, the fetch is refused rather than served from an unpinned branch, and the
+  bundled presets stay available.
 - **Safe apply** — writes `~/.config/starship.toml` with a timestamped backup
   (`starship.toml.bak.<timestamp>`) created automatically.
 - **Links** — docs at [starship.rs](https://starship.rs) and the full presets catalog
@@ -195,8 +336,12 @@ theme file installed on your machine and asserts byte-for-byte equality.
 Cutting a release is one command ([`scripts/release.sh`](scripts/release.sh)):
 
 ```sh
-scripts/release.sh 0.1.1     # or: patch | minor | major
+scripts/release.sh 1.1.0     # or: patch | minor | major | final
 ```
+
+`final` drops a pre-release suffix (`1.1.0-rc.3` → `1.1.0`) — the normal way to ship an
+RC that has held up. Bumping `patch` from a pre-release is refused, since `1.1.0-rc.3`
+sorts *below* `1.1.0` and would skip the release the RC was previewing.
 
 It verifies a clean, green, up-to-date `main`, bumps the version in `Cargo.toml` and the
 Homebrew formula, commits and pushes the `vX.Y.Z` tag, waits for the release workflow to

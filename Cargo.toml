@@ -1,6 +1,6 @@
 [package]
 name = "hauntty"
-version = "1.0.0"
+version = "1.1.0-rc.1"
 edition = "2021"
 # Verified by the `msrv` job in CI — keep that pin in sync with this value.
 # 1.88 is what the current dependency tree requires (darling 0.23).
@@ -22,6 +22,7 @@ online = ["dep:ureq", "dep:serde_json"]
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
+signal-hook = "0.3"
 anyhow = "1"
 thiserror = "2"
 nucleo-matcher = "0.3"

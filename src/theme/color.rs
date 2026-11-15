@@ -76,6 +76,12 @@ impl Rgb {
         0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
     }
 
+    /// WCAG contrast ratio against `other`, from 1.0 (identical) to 21.0.
+    pub fn contrast_ratio(self, other: Rgb) -> f32 {
+        let (a, b) = (self.luminance(), other.luminance());
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
     /// Black or white, whichever contrasts better on this color as a background.
     pub fn contrast_text(self) -> Rgb {
         if self.luminance() > 0.179 {
@@ -89,6 +95,14 @@ impl Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contrast_ratio_spans_one_to_twenty_one() {
+        let (black, white) = (Rgb::new(0, 0, 0), Rgb::new(255, 255, 255));
+        assert!((black.contrast_ratio(white) - 21.0).abs() < 0.01);
+        assert!((white.contrast_ratio(black) - 21.0).abs() < 0.01);
+        assert!((black.contrast_ratio(black) - 1.0).abs() < 0.01);
+    }
 
     #[test]
     fn parses_with_and_without_hash() {
