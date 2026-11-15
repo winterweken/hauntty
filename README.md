@@ -210,7 +210,7 @@ returns from the browser to the path field.
 
 ## What's new
 
-### Release candidate — v1.1.0-rc.1 (from `dev`)
+### v1.1.0
 
 - **Customize a theme's colors in place** — press `c` on the Themes tab to edit the
   background, foreground, cursor, selection, and all 16 ANSI colors against the live
@@ -240,6 +240,12 @@ returns from the browser to the path field.
   whether a newer release is published for your channel (stable, or release candidates
   if you're running one). Explicit only: hauntty still never touches the network on
   its own, and it never installs anything.
+- **A sharper TUI.** A green `●` marks the theme your config uses and every setting
+  changed from its default; list titles show your position (`themes 1/822`) and long
+  lists get a scrollbar; below 72 columns the preview stacks under the list; `g`/`G`,
+  `Home`/`End` and `PgUp`/`PgDn` work on every list; the preview's border reports
+  dark/light and the WCAG contrast ratio; and borders, selection and cursor styling are
+  consistent across every tab and overlay.
 
 ### v1.0.0
 
