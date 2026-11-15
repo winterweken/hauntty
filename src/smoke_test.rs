@@ -23,6 +23,71 @@ impl Drop for TempDir {
     }
 }
 
+/// A throwaway config and themes dir, and an `App` over them.
+fn fresh_app(tag: &str) -> (App, TempDir) {
+    let path = std::env::temp_dir().join(format!("hauntty-smoke-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    let dir = TempDir(path);
+    let cfg = dir.0.join("config");
+    std::fs::write(&cfg, "background = 282a36\n").unwrap();
+    let themes = dir.0.join("bundled");
+    std::fs::create_dir_all(&themes).unwrap();
+    (
+        App::new(Paths::resolve(Some(cfg), Some(themes))).unwrap(),
+        dir,
+    )
+}
+
+/// The rendered screen, one string per row.
+fn screen_rows(terminal: &Terminal<TestBackend>) -> Vec<String> {
+    let buf = terminal.backend().buffer();
+    (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                .collect()
+        })
+        .collect()
+}
+
+// A long toast grows downward rather than clipping: the release URL from an
+// update check has to be fully readable on an 80-column terminal.
+#[cfg(feature = "online")]
+#[test]
+fn long_toast_wraps_instead_of_clipping() {
+    use hauntty::update::{UpdateStatus, Version};
+    let (mut app, _dir) = fresh_app("toast");
+    let url = "https://github.com/winterweken/hauntty/releases/tag/v1.1.0";
+    app.show_update_status(Ok(UpdateStatus::Available {
+        current: Version::parse("1.0.0").unwrap(),
+        latest: Version::parse("1.1.0").unwrap(),
+        url: url.into(),
+    }));
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|f| ui::render(f, &app)).unwrap();
+    let rows = screen_rows(&terminal);
+    assert!(
+        rows.iter().any(|r| r.contains("1.1.0 is available")),
+        "{}",
+        rows.join("\n")
+    );
+    assert!(
+        rows.iter().any(|r| r.contains(url)),
+        "the URL must be on screen in full:\n{}",
+        rows.join("\n")
+    );
+
+    // Tiny terminals still render the same toast without panicking.
+    for (w, h) in [(30, 10), (1, 1)] {
+        Terminal::new(TestBackend::new(w, h))
+            .unwrap()
+            .draw(|f| ui::render(f, &app))
+            .unwrap();
+    }
+}
+
 #[test]
 fn renders_and_handles_input_without_panicking() {
     let path = std::env::temp_dir().join(format!("hauntty-smoke-{}", std::process::id()));

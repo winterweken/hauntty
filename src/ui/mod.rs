@@ -873,26 +873,96 @@ fn render_toast(f: &mut Frame, area: Rect, toast: &crate::app::Toast) {
         ToastKind::Success => (Color::Rgb(0x9e, 0xce, 0x6a), "✓"),
         ToastKind::Error => (Color::Rgb(0xf7, 0x76, 0x8e), "✗"),
     };
-    let text = format!(" {tag} {} ", toast.text);
-    let w = (text.chars().count() as u16 + 2).min(area.width.saturating_sub(2));
+    // A message wider than the terminal wraps, and the box grows with it (up
+    // to a few rows) instead of clipping the overflow: a release URL or an
+    // error chain has to stay readable on an 80-column terminal.
+    const MAX_ROWS: usize = 4;
+    let prefix = format!(" {tag} ");
+    let indent = " ".repeat(prefix.chars().count());
+    // Box borders and a one-column margin each side; the prefix and a
+    // trailing space sit inside that.
+    let max_line = (area.width as usize).saturating_sub(4);
+    let text_width = max_line.saturating_sub(prefix.chars().count() + 1).max(1);
+    let mut wrapped = wrap_words(&toast.text, text_width);
+    if wrapped.len() > MAX_ROWS {
+        wrapped.truncate(MAX_ROWS);
+        if let Some(last) = wrapped.last_mut() {
+            if last.chars().count() >= text_width {
+                last.pop();
+            }
+            last.push('…');
+        }
+    }
+    let lines: Vec<Line> = wrapped
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let lead = if i == 0 { &prefix } else { &indent };
+            Line::from(format!("{lead}{text} "))
+        })
+        .collect();
+    let longest = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let w = (longest + 2).min(area.width.saturating_sub(2));
+    let h = (lines.len() as u16 + 2).min(area.height);
     let rect = Rect {
         x: area.x + area.width.saturating_sub(w + 1),
-        y: area.y + area.height.saturating_sub(4),
+        y: area.y + area.height.saturating_sub(h + 1),
         width: w,
-        height: 3,
+        height: h,
     };
     f.render_widget(Clear, rect);
     f.render_widget(
-        Paragraph::new(text)
+        Paragraph::new(lines)
             .style(Style::default().fg(color))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(color)),
-            )
-            .wrap(Wrap { trim: true }),
+            ),
         rect,
     );
+}
+
+/// Greedy word wrap to `width` columns (counted in chars). A word longer than
+/// the width — a URL, typically — is split so nothing is lost; empty input
+/// yields one empty line.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word;
+        loop {
+            let word_len = word.chars().count();
+            if line.is_empty() && word_len > width {
+                let split = word
+                    .char_indices()
+                    .nth(width)
+                    .map(|(i, _)| i)
+                    .unwrap_or(word.len());
+                lines.push(word[..split].to_string());
+                word = &word[split..];
+                continue;
+            }
+            let needed = if line.is_empty() {
+                word_len
+            } else {
+                line.chars().count() + 1 + word_len
+            };
+            if needed <= width {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(word);
+                break;
+            }
+            lines.push(std::mem::take(&mut line));
+        }
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -914,5 +984,37 @@ fn center(area: Rect, width: u16, height: u16) -> Rect {
         y: area.y + (area.height.saturating_sub(h)) / 2,
         width: w,
         height: h,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_words;
+
+    #[test]
+    fn wraps_at_word_boundaries() {
+        assert_eq!(wrap_words("short", 20), ["short"]);
+        assert_eq!(
+            wrap_words("hauntty 1.1.0 is available (you have 1.0.0)", 24),
+            ["hauntty 1.1.0 is", "available (you have", "1.0.0)"]
+        );
+    }
+
+    #[test]
+    fn splits_words_longer_than_the_width() {
+        assert_eq!(
+            wrap_words("https://example.invalid/abcdef", 10),
+            ["https://ex", "ample.inva", "lid/abcdef"]
+        );
+        assert_eq!(
+            wrap_words("a https://example.invalid/abc b", 12),
+            ["a", "https://exam", "ple.invalid/", "abc b"]
+        );
+    }
+
+    #[test]
+    fn degenerate_inputs() {
+        assert_eq!(wrap_words("", 10), [""]);
+        assert_eq!(wrap_words("x y", 0), ["x", "y"]);
     }
 }
