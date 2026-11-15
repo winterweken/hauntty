@@ -25,3 +25,5 @@ pub mod import;
 
 #[cfg(feature = "online")]
 pub mod fetch;
+#[cfg(feature = "online")]
+pub mod update;

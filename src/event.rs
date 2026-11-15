@@ -155,6 +155,11 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Help;
             return;
         }
+        #[cfg(feature = "online")]
+        KeyCode::Char('u') => {
+            app.start_update_check();
+            return;
+        }
         _ => {}
     }
 

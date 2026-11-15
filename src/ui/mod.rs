@@ -727,6 +727,11 @@ fn render_import_browser(f: &mut Frame, area: Rect, browser: &crate::import_path
     );
 }
 
+#[cfg(feature = "online")]
+const GLOBAL_KEYS_HELP: &str = "Tab / 1-4 switches panes · u checks for a newer release · q quits";
+#[cfg(not(feature = "online"))]
+const GLOBAL_KEYS_HELP: &str = "Tab / 1-4 switches panes · q quits";
+
 fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
     let rect = center(area, 70, 20);
     f.render_widget(Clear, rect);
@@ -741,7 +746,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
         Line::from("Settings tab: ↑↓ move · ←→ change · Enter edit/toggle · s save"),
         Line::from("Starship tab: ↑↓ move · / filter · Enter apply preset · i install · f fetch"),
         Line::from("Tools tab: ↑↓ move · Enter install · r refresh · b set up Homebrew"),
-        Line::from("Tab / 1-4 switches panes · q quits"),
+        Line::from(GLOBAL_KEYS_HELP),
         Line::from(""),
         Line::from(Span::styled(
             "After applying Ghostty settings, reload with ⌘⇧, (cmd+shift+,)",

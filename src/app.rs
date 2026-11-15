@@ -14,6 +14,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 #[cfg(feature = "online")]
 use hauntty::fetch::{self, RemoteStarshipPreset, RemoteTheme};
+#[cfg(feature = "online")]
+use hauntty::update::UpdateStatus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -155,6 +157,9 @@ pub struct App {
     /// Spinner animation tick.
     #[cfg(feature = "online")]
     pub spinner: usize,
+    /// Receiver for an in-flight release check, if any.
+    #[cfg(feature = "online")]
+    update_rx: Option<Receiver<Result<UpdateStatus, String>>>,
 
     /// Receiver for an in-flight Starship install, if any.
     starship_install_rx: Option<Receiver<Result<String, String>>>,
@@ -215,6 +220,8 @@ impl App {
             fetching: false,
             #[cfg(feature = "online")]
             spinner: 0,
+            #[cfg(feature = "online")]
+            update_rx: None,
             starship_install_rx: None,
             matcher: Matcher::new(Config::DEFAULT),
         };
@@ -439,6 +446,7 @@ impl App {
     /// Drain any completed background network result and apply it.
     #[cfg(feature = "online")]
     pub fn poll_background(&mut self) {
+        self.poll_update_check();
         let msg = match &self.fetch_rx {
             Some(rx) => match rx.try_recv() {
                 Ok(m) => m,
@@ -545,6 +553,65 @@ impl App {
     /// No-op when the online feature is disabled.
     #[cfg(not(feature = "online"))]
     pub fn poll_background(&mut self) {}
+
+    // ---- update check (online) -----------------------------------------
+
+    /// Ask GitHub, on a background thread, whether a newer release exists.
+    /// Explicit user action only: hauntty never phones home on its own.
+    #[cfg(feature = "online")]
+    pub fn start_update_check(&mut self) {
+        if self.update_rx.is_some() {
+            self.toast(ToastKind::Info, "Already checking for updates…");
+            return;
+        }
+        self.toast(
+            ToastKind::Info,
+            "Checking GitHub for a newer hauntty release…",
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.update_rx = Some(rx);
+        std::thread::spawn(move || {
+            let res = hauntty::update::check_for_update().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Drain a completed release check, if any.
+    #[cfg(feature = "online")]
+    fn poll_update_check(&mut self) {
+        let msg = match &self.update_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => {
+                    self.update_rx = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.update_rx = None;
+        self.show_update_status(msg);
+    }
+
+    /// Report a release check's outcome as a toast.
+    #[cfg(feature = "online")]
+    pub fn show_update_status(&mut self, result: Result<UpdateStatus, String>) {
+        match result {
+            Ok(status) => {
+                let kind = match status {
+                    UpdateStatus::Current { .. } => ToastKind::Success,
+                    _ => ToastKind::Info,
+                };
+                let text = match &status {
+                    UpdateStatus::Available { url, .. } => format!("{} — {url}", status.summary()),
+                    _ => status.summary(),
+                };
+                self.toast(kind, text);
+            }
+            Err(e) => self.toast(ToastKind::Error, format!("Update check failed: {e}")),
+        }
+    }
 
     /// Drain a completed Starship install result, if any.
     pub fn poll_starship_install(&mut self) {
@@ -1565,5 +1632,41 @@ mod tests {
             app.current_starship_preset().unwrap().toml_content,
             "format = \"v2\""
         );
+    }
+
+    #[cfg(feature = "online")]
+    #[test]
+    fn update_check_outcomes_become_toasts() {
+        use hauntty::update::Version;
+        let v = |s: &str| Version::parse(s).unwrap();
+        let (mut app, _dir) = test_app("update", "background = 282a36\n");
+
+        app.show_update_status(Ok(UpdateStatus::Available {
+            current: v("1.0.0"),
+            latest: v("1.1.0"),
+            url: "https://example.invalid/r/v1.1.0".into(),
+        }));
+        let toast = app.toast.as_ref().unwrap();
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert!(toast.text.contains("1.1.0") && toast.text.contains("1.0.0"));
+        assert!(toast.text.contains("https://example.invalid/r/v1.1.0"));
+
+        app.show_update_status(Ok(UpdateStatus::Current {
+            current: v("1.0.0"),
+        }));
+        assert_eq!(app.toast.as_ref().unwrap().kind, ToastKind::Success);
+
+        app.show_update_status(Ok(UpdateStatus::Ahead {
+            current: v("1.1.0-rc.1"),
+            latest: Some(v("1.0.0")),
+        }));
+        let toast = app.toast.as_ref().unwrap();
+        assert_eq!(toast.kind, ToastKind::Info);
+        assert!(toast.text.contains("newer than"));
+
+        app.show_update_status(Err("offline".into()));
+        let toast = app.toast.as_ref().unwrap();
+        assert_eq!(toast.kind, ToastKind::Error);
+        assert!(toast.text.contains("offline"));
     }
 }
