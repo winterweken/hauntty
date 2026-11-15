@@ -73,6 +73,18 @@ cargo build --release
 > Homebrew, `cargo install hauntty`, and `install.sh` all track the latest **stable**
 > release. Release candidates are published separately — see below.
 
+### Checking for updates
+
+```sh
+hauntty --check-update
+```
+
+Or press `u` inside hauntty. Either compares the running version with the newest
+release published on GitHub for its channel — a stable build looks at stable releases
+only, while a release candidate also sees newer candidates — and says whether there is
+something newer and where to get it. Like every network feature in hauntty, it runs
+only when you ask, and it never installs anything.
+
 ### Release candidates
 
 Development lands on the [`dev` branch](https://github.com/winterweken/hauntty/tree/dev).
@@ -97,14 +109,17 @@ current release candidate and what it contains.
 hauntty                       # manage the default Ghostty config
 hauntty --config /path/config # operate on a specific config file
 hauntty --themes-dir /path    # add a directory to search for themes
+hauntty --check-update        # ask GitHub whether a newer release is published
 ```
 
 ### Keybindings
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
+| `Tab` / `Shift-Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
 | `↑ ↓` / `j k` | move selection |
+| `g` `G` / `Home` `End` | jump to the first / last item in a list |
+| `PgUp` `PgDn` | move several rows at once (Themes, Settings, Starship) / scroll the details pane (Tools) |
 | `/` | filter themes or Starship presets |
 | `Enter` | apply theme / edit setting / apply Starship preset |
 | `c` | customize the selected theme's colors (Themes) |
@@ -112,6 +127,7 @@ hauntty --themes-dir /path    # add a directory to search for themes
 | `← →` / `h l` | change a setting |
 | `i` | import `.itermcolors` (Themes) / install Starship (Starship) |
 | `f` | fetch themes (Themes) / presets (Starship) from the upstream catalogs |
+| `u` | check GitHub for a newer hauntty release |
 | `s` | save settings changes |
 | `Enter` / `i` | review installation (Tools); `y` confirms |
 | `r` / `b` | refresh tool status / set up Homebrew (Tools) |
@@ -220,6 +236,10 @@ returns from the browser to the path field.
   before an apply now claims its name with the finished file itself, so a save cut
   short no longer leaves a colorless placeholder that blocks the name and shows up in
   the Themes list.
+- **Check for updates** — press `u`, or run `hauntty --check-update`, to ask GitHub
+  whether a newer release is published for your channel (stable, or release candidates
+  if you're running one). Explicit only: hauntty still never touches the network on
+  its own, and it never installs anything.
 
 ### v1.0.0
 

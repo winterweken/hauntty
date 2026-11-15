@@ -1,10 +1,10 @@
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Style, Stylize};
+use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
-use super::{ACCENT, MUTED};
+use super::style::{self, ACCENT, CURSOR, GREEN, MUTED};
 use crate::app::App;
 use hauntty::tools::{self, CATALOG};
 
@@ -25,26 +25,23 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .map(|tool| {
             let status = if host.installed(tool.id) {
-                "installed"
+                Line::from("  ✓ installed").fg(GREEN)
             } else {
-                "not installed"
+                Line::from("  ○ not installed").fg(MUTED)
             };
-            ListItem::new(vec![
-                Line::from(tool.name),
-                Line::from(format!("  {status}")).fg(MUTED),
-            ])
+            ListItem::new(vec![Line::from(tool.name), status])
         })
         .collect();
     let mut state = ListState::default().with_selected(Some(app.tools.selected));
     f.render_stateful_widget(
         List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" terminal tools "),
-            )
-            .highlight_symbol("› ")
-            .highlight_style(Style::default().fg(ACCENT).bold()),
+            .block(style::panel(style::list_title(
+                "terminal tools",
+                app.tools.selected,
+                CATALOG.len(),
+            )))
+            .highlight_symbol(CURSOR)
+            .highlight_style(style::selection()),
         cols[0],
         &mut state,
     );
@@ -95,11 +92,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((app.tools.scroll, 0))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" details · PgUp/PgDn to scroll "),
-            ),
+            .block(style::panel(" details · PgUp/PgDn to scroll ")),
         cols[1],
     );
 }
@@ -110,10 +103,7 @@ pub fn render_confirmation(f: &mut Frame, area: Rect, app: &App) {
     };
     let rect = super::center(area, 90, 26);
     f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(format!(" {} ", plan.title));
+    let block = style::overlay(format!(" {} ", plan.title));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).split(inner);

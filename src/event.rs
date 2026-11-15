@@ -155,6 +155,11 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             app.mode = Mode::Help;
             return;
         }
+        #[cfg(feature = "online")]
+        KeyCode::Char('u') => {
+            app.start_update_check();
+            return;
+        }
         _ => {}
     }
 
@@ -169,6 +174,14 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
                     (app.tools.selected + 1).min(hauntty::tools::CATALOG.len() - 1);
                 app.tools.scroll = 0;
             }
+            KeyCode::Home | KeyCode::Char('g') => {
+                app.tools.selected = 0;
+                app.tools.scroll = 0;
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                app.tools.selected = hauntty::tools::CATALOG.len() - 1;
+                app.tools.scroll = 0;
+            }
             KeyCode::Enter | KeyCode::Char('i') => app.review_tool_install(),
             KeyCode::Char('b') => app.review_homebrew_install(),
             KeyCode::Char('r') => app.tools.host = hauntty::tools::Host::detect(),
@@ -181,8 +194,8 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             KeyCode::Down | KeyCode::Char('j') => app.move_theme(1),
             KeyCode::PageUp => app.move_theme(-10),
             KeyCode::PageDown => app.move_theme(10),
-            KeyCode::Home => app.move_theme(-(i32::MAX)),
-            KeyCode::End => app.move_theme(i32::MAX),
+            KeyCode::Home | KeyCode::Char('g') => app.move_theme(-(i32::MAX)),
+            KeyCode::End | KeyCode::Char('G') => app.move_theme(i32::MAX),
             KeyCode::Char('/') => app.mode = Mode::Filter,
             KeyCode::Enter => app.start_apply(),
             KeyCode::Char('c') => app.start_customize(),
@@ -195,6 +208,10 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
         Tab::Settings => match key.code {
             KeyCode::Up | KeyCode::Char('k') => app.move_setting(-1),
             KeyCode::Down | KeyCode::Char('j') => app.move_setting(1),
+            KeyCode::PageUp => app.move_setting(-10),
+            KeyCode::PageDown => app.move_setting(10),
+            KeyCode::Home | KeyCode::Char('g') => app.move_setting(-(i32::MAX)),
+            KeyCode::End | KeyCode::Char('G') => app.move_setting(i32::MAX),
             KeyCode::Left | KeyCode::Char('h') => app.adjust_setting(-1),
             KeyCode::Right | KeyCode::Char('l') => app.adjust_setting(1),
             KeyCode::Enter | KeyCode::Char(' ') => app.activate_setting(),
@@ -206,8 +223,8 @@ fn handle_normal(app: &mut App, key: KeyEvent) {
             KeyCode::Down | KeyCode::Char('j') => app.move_starship(1),
             KeyCode::PageUp => app.move_starship(-5),
             KeyCode::PageDown => app.move_starship(5),
-            KeyCode::Home => app.move_starship(-(i32::MAX)),
-            KeyCode::End => app.move_starship(i32::MAX),
+            KeyCode::Home | KeyCode::Char('g') => app.move_starship(-(i32::MAX)),
+            KeyCode::End | KeyCode::Char('G') => app.move_starship(i32::MAX),
             KeyCode::Char('/') => app.mode = Mode::Filter,
             KeyCode::Enter => app.apply_starship_preset(),
             KeyCode::Char('i') => app.install_starship(),

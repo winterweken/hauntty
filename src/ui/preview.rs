@@ -3,7 +3,7 @@
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
 
 use hauntty::theme::{Rgb, Theme};
@@ -20,11 +20,28 @@ pub fn render(f: &mut Frame, area: Rect, theme: &Theme) {
     let bg = theme.bg();
     let fg = theme.fg();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
+    let mut block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .title(format!(" {} · {} ", theme.name, theme.source.label()))
         .border_style(Style::default().fg(fg.to_ratatui()))
         .style(Style::default().bg(bg.to_ratatui()));
+    if theme.is_renderable() {
+        // How legible body text is on this theme, by WCAG contrast ratio.
+        let ratio = fg.contrast_ratio(bg);
+        let grade = match ratio {
+            r if r >= 7.0 => "AAA",
+            r if r >= 4.5 => "AA",
+            _ => "low",
+        };
+        let tone = if bg.luminance() <= fg.luminance() {
+            "dark"
+        } else {
+            "light"
+        };
+        block = block.title_bottom(
+            Line::from(format!(" {tone} · contrast {ratio:.1}:1 {grade} ")).right_aligned(),
+        );
+    }
     let inner = block.inner(area);
     f.render_widget(block, area);
 

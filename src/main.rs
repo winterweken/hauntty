@@ -34,6 +34,7 @@ struct Args {
     themes_dir: Option<PathBuf>,
     help: bool,
     version: bool,
+    check_update: bool,
 }
 
 fn parse_args() -> Result<Args> {
@@ -42,12 +43,14 @@ fn parse_args() -> Result<Args> {
         themes_dir: None,
         help: false,
         version: false,
+        check_update: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => args.help = true,
             "-V" | "--version" => args.version = true,
+            "--check-update" => args.check_update = true,
             "--config" => {
                 args.config = Some(PathBuf::from(it.next().context("--config needs a path")?));
             }
@@ -69,6 +72,7 @@ USAGE:\n    hauntty [OPTIONS]\n\n\
 OPTIONS:\n    \
 --config <PATH>        Use a specific Ghostty config file\n    \
 --themes-dir <PATH>    Add a directory to search for themes\n    \
+--check-update         Ask GitHub whether a newer release is published, then exit\n    \
 -h, --help             Show this help\n    \
 -V, --version          Show version\n\n\
 ENVIRONMENT:\n    \
@@ -90,6 +94,9 @@ fn main() -> Result<()> {
         println!("hauntty {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if args.check_update {
+        return check_update();
+    }
 
     let paths = Paths::resolve(args.config, args.themes_dir);
     let mut app = App::new(paths).context("initializing hauntty")?;
@@ -101,6 +108,26 @@ fn main() -> Result<()> {
     }
 
     run(&mut app)
+}
+
+/// `--check-update`: one request to GitHub, one or two lines, exit. Nothing is
+/// installed; the exit status is non-zero only when the check itself fails.
+#[cfg(feature = "online")]
+fn check_update() -> Result<()> {
+    use hauntty::update::{check_for_update, UpdateStatus};
+    let status = check_for_update().context("checking for updates")?;
+    println!("{}", status.summary());
+    if let UpdateStatus::Available { url, .. } = &status {
+        println!("{url}");
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "online"))]
+fn check_update() -> Result<()> {
+    anyhow::bail!(
+        "this hauntty was built without the `online` feature, so --check-update is unavailable"
+    )
 }
 
 fn run(app: &mut App) -> Result<()> {

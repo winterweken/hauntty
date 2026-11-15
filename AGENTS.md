@@ -24,8 +24,9 @@ in `Cargo.toml` and the MSRV job in `.github/workflows/ci.yml` in sync.
 - `src/settings.rs`: editable settings registry and widget definitions.
 - `src/paths.rs`: platform-specific config and theme discovery.
 - `src/starship.rs`: Starship detection, presets, installation, and config writes.
-- `src/import.rs`, `src/import_path.rs`, and `src/fetch.rs`: optional iTerm2 import,
-  its path-entry file browser, and the online theme/preset catalogs.
+- `src/import.rs`, `src/import_path.rs`, `src/fetch.rs`, and `src/update.rs`: optional
+  iTerm2 import, its path-entry file browser, the online theme/preset catalogs, and
+  the release update check.
 - `tests/`: config round trips, file application, and Starship integration tests.
   Unit tests live beside implementation; TUI smoke tests are in `src/smoke_test.rs`.
 
@@ -61,6 +62,8 @@ do not modify the developer's real Ghostty or Starship configuration.
   collapsing them to a single value.
 - Keep terminal restoration on exit and panic, and keep network work from
   blocking the interactive event loop.
+- Touch the network only on an explicit user action (`f` fetches a catalog, `u` and
+  `--check-update` look for a newer release); never fetch or check on startup.
 - Pin the Starship preset catalog to the release tag matching the detected
   `starship --version`, falling back to `main` only when it is absent or unparsable;
   presets must not reference modules the installed binary cannot parse.

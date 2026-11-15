@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 
 use crate::theme::{Theme, ThemeSource};
 
-const USER_AGENT: &str = concat!("hauntty/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("hauntty/", env!("CARGO_PKG_VERSION"));
 const CONTENTS_API: &str =
     "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/ghostty?ref=master";
 
