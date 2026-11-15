@@ -116,8 +116,10 @@ hauntty --check-update        # ask GitHub whether a newer release is published
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
+| `Tab` / `Shift-Tab` / `1` `2` `3` `4` | switch between Themes, Settings, Starship, and Tools |
 | `↑ ↓` / `j k` | move selection |
+| `g` `G` / `Home` `End` | jump to the first / last item in a list |
+| `PgUp` `PgDn` | move several rows at once (Themes, Settings, Starship) / scroll the details pane (Tools) |
 | `/` | filter themes or Starship presets |
 | `Enter` | apply theme / edit setting / apply Starship preset |
 | `c` | customize the selected theme's colors (Themes) |
