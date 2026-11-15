@@ -102,11 +102,15 @@ impl Draft {
     pub fn new(theme: &Theme, config: &ConfigDocument) -> Result<Self> {
         let content = fs::read_to_string(&theme.path).context("reading the selected theme")?;
         let mut source = ConfigDocument::parse(&theme.path, &content);
-        let active = config.lines.iter().rev().find_map(|line| match line {
-            Line::KeyValue(kv) if kv.key == "theme" => Some(kv.value.trim().trim_matches('"')),
-            _ => None,
-        });
-        if active == Some(theme.name.as_str()) {
+        // The config's inline color lines override the active theme, so a
+        // draft of an active theme starts from what the user actually sees.
+        // `dark:A,light:B` selects two themes, and either counts as active —
+        // the same reading the Themes list uses for its active marker.
+        if config
+            .active_theme_names()
+            .iter()
+            .any(|name| name == &theme.name)
+        {
             source.lines.extend(config.lines.iter().filter(|line| {
                 matches!(line, Line::KeyValue(kv) if hauntty::apply::INLINE_COLOR_KEYS.contains(&kv.key.as_str()))
             }).cloned());
@@ -645,6 +649,28 @@ mod tests {
         }
         assert!(!text.contains("palette = 1=#333333"));
         assert!(!text.contains("theme ="));
+    }
+
+    // `theme = dark:A,light:B` selects two themes; a draft of either starts
+    // from the config's inline overrides, exactly like a single active theme.
+    #[test]
+    fn conditionally_selected_theme_inherits_inline_overrides() {
+        let mut f = fixture(
+            "conditional-inline",
+            "background = #123456\n",
+            "theme = dark:Base,light:Other\nbackground = #654321\n",
+        );
+        f.app.start_customize();
+        assert_eq!(f.app.customize.as_ref().unwrap().value(0), "#654321");
+
+        // A theme the pair does not name keeps its own colors.
+        let mut g = fixture(
+            "conditional-other",
+            "background = #123456\n",
+            "theme = dark:Zzz,light:Other\nbackground = #654321\n",
+        );
+        g.app.start_customize();
+        assert_eq!(g.app.customize.as_ref().unwrap().value(0), "#123456");
     }
 
     #[test]

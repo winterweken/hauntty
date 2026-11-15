@@ -132,6 +132,38 @@ impl ConfigDocument {
             .collect()
     }
 
+    /// Theme names the config currently selects: the last `theme =` line
+    /// wins, surrounding quotes are dropped, and Ghostty's `dark:A,light:B`
+    /// pair names two themes. Empty when no theme is set.
+    pub fn active_theme_names(&self) -> Vec<String> {
+        let Some(value) = self
+            .indices_of("theme")
+            .last()
+            .and_then(|&i| match &self.lines[i] {
+                Line::KeyValue(kv) => Some(kv.value.trim()),
+                _ => None,
+            })
+        else {
+            return Vec::new();
+        };
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .unwrap_or(value);
+        value
+            .split(',')
+            .map(|part| {
+                let part = part.trim();
+                part.strip_prefix("dark:")
+                    .or_else(|| part.strip_prefix("light:"))
+                    .unwrap_or(part)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
     /// Number of active lines with this key.
     pub fn count(&self, key: &str) -> usize {
         self.indices_of(key).len()
@@ -442,5 +474,16 @@ keybind = cmd+d=new_split:right
         assert_eq!(civil_from_unix(1_784_808_000), (2026, 7, 23, 12, 0, 0));
         // a leap-day boundary: 2024-02-29 00:00:00 UTC
         assert_eq!(civil_from_unix(1_709_164_800), (2024, 2, 29, 0, 0, 0));
+    }
+
+    #[test]
+    fn active_theme_names_follow_the_last_theme_line() {
+        let names = |content: &str| ConfigDocument::parse("x", content).active_theme_names();
+        assert!(names("font-size = 12\n").is_empty());
+        assert!(names("theme = \n").is_empty());
+        assert_eq!(names("theme = Dracula\n"), ["Dracula"]);
+        assert_eq!(names("theme = \"Tokyo Night\"\n"), ["Tokyo Night"]);
+        assert_eq!(names("theme = dark:Foo, light:Bar\n"), ["Foo", "Bar"]);
+        assert_eq!(names("theme = Old\ntheme = New\n"), ["New"]);
     }
 }
