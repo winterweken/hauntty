@@ -2,21 +2,25 @@
 
 mod color_picker;
 mod preview;
+mod style;
 mod tools;
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use hauntty::settings::Widget;
 use hauntty::theme::Theme;
 
 use crate::app::{App, Mode, Tab, ToastKind};
+use style::{ACCENT, CURSOR, GREEN, MUTED, RED, TEXT, YELLOW};
 
-const ACCENT: Color = Color::Rgb(0xbb, 0x9a, 0xf7); // soft violet
-const MUTED: Color = Color::Rgb(0x6a, 0x71, 0x89);
+/// Below this width a list and its preview no longer fit side by side.
+const SIDE_BY_SIDE_MIN_WIDTH: u16 = 72;
+/// Rows the theme preview needs when it is stacked under the list.
+const STACKED_PREVIEW_HEIGHT: u16 = 15;
 
 pub fn render(f: &mut Frame, app: &App) {
     let area = f.area();
@@ -53,13 +57,52 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_tabs(f: &mut Frame, area: Rect, app: &App) {
+    let mut tabs = Vec::new();
+    for (i, (tab, name)) in [
+        (Tab::Themes, "Themes"),
+        (Tab::Settings, "Settings"),
+        (Tab::Starship, "Starship"),
+        (Tab::Tools, "Tools"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let style = if tab == app.tab {
+            Style::default().fg(ACCENT).bold().underlined()
+        } else {
+            Style::default().fg(MUTED)
+        };
+        tabs.push(Span::styled(
+            format!(" {} ", i + 1),
+            Style::default().fg(MUTED),
+        ));
+        tabs.push(Span::styled(name, style));
+        tabs.push(Span::raw(" "));
+    }
+    let tabs = Line::from(tabs);
+
+    // The status goes on the right when it fits, shortened before it is dropped.
+    let (full, short) = if app.dirty {
+        ("● unsaved changes ".to_string(), "● ".to_string())
+    } else if !app.warnings.is_empty() {
+        let n = app.warnings.len();
+        (format!("⚠ {n} warning(s) · ? "), format!("⚠ {n} "))
+    } else {
+        (String::new(), String::new())
+    };
+    const BRAND_WIDTH: u16 = 10;
+    let room = area.width.saturating_sub(BRAND_WIDTH + tabs.width() as u16) as usize;
+    let status = [full, short]
+        .into_iter()
+        .find(|text| Span::raw(text.as_str()).width() <= room)
+        .unwrap_or_default();
+
     let cols = Layout::horizontal([
-        Constraint::Length(10),
+        Constraint::Length(BRAND_WIDTH),
         Constraint::Min(0),
-        Constraint::Length(if area.width >= 100 { 24 } else { 0 }),
+        Constraint::Length(Span::raw(status.as_str()).width() as u16),
     ])
     .split(area);
-
     f.render_widget(
         Paragraph::new(Span::styled(
             " hauntty ",
@@ -67,39 +110,50 @@ fn render_tabs(f: &mut Frame, area: Rect, app: &App) {
         )),
         cols[0],
     );
+    f.render_widget(Paragraph::new(tabs), cols[1]);
+    f.render_widget(
+        Paragraph::new(Span::styled(status, Style::default().fg(YELLOW)))
+            .alignment(Alignment::Right),
+        cols[2],
+    );
+}
 
-    let titles = vec![
-        Line::from("Themes"),
-        Line::from("Settings"),
-        Line::from("Starship"),
-        Line::from("Tools"),
-    ];
-    let selected = match app.tab {
-        Tab::Themes => 0,
-        Tab::Settings => 1,
-        Tab::Starship => 2,
-        Tab::Tools => 3,
-    };
-    let tabs = Tabs::new(titles)
-        .select(selected)
-        .style(Style::default().fg(MUTED))
-        .highlight_style(Style::default().fg(ACCENT).add_modifier(Modifier::BOLD));
-    f.render_widget(tabs, cols[1]);
-
-    let right = if app.dirty {
-        Span::styled(
-            "● unsaved changes ",
-            Style::default().fg(Color::Rgb(0xe0, 0xaf, 0x68)),
-        )
-    } else if !app.warnings.is_empty() {
-        Span::styled(
-            format!("⚠ {} warning(s)  ?", app.warnings.len()),
-            Style::default().fg(Color::Rgb(0xe0, 0xaf, 0x68)),
-        )
+/// Split a pane into a list and an optional preview: side by side when wide,
+/// stacked when narrow but tall, and list-only when neither fits.
+fn list_and_preview(area: Rect, list_percent: u16) -> (Rect, Option<Rect>) {
+    if area.width >= SIDE_BY_SIDE_MIN_WIDTH {
+        let cols = Layout::horizontal([
+            Constraint::Percentage(list_percent),
+            Constraint::Percentage(100 - list_percent),
+        ])
+        .split(area);
+        (cols[0], Some(cols[1]))
+    } else if area.height >= STACKED_PREVIEW_HEIGHT + 10 {
+        let rows = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(STACKED_PREVIEW_HEIGHT),
+        ])
+        .split(area);
+        (rows[0], Some(rows[1]))
     } else {
-        Span::styled("", Style::default())
-    };
-    f.render_widget(Paragraph::new(right).alignment(Alignment::Right), cols[2]);
+        (area, None)
+    }
+}
+
+/// The one-line filter prompt above a filterable list.
+fn filter_line<'a>(filter: &'a str, editing: bool, noun: &str) -> Line<'a> {
+    if editing || !filter.is_empty() {
+        Line::from(vec![
+            Span::styled(" / ", Style::default().fg(ACCENT)),
+            Span::raw(filter),
+            Span::styled(if editing { "▏" } else { "" }, Style::default().fg(ACCENT)),
+        ])
+    } else {
+        Line::from(Span::styled(
+            format!(" press / to filter {noun}"),
+            Style::default().fg(MUTED),
+        ))
+    }
 }
 
 fn render_themes(f: &mut Frame, area: Rect, app: &App) {
@@ -107,77 +161,83 @@ fn render_themes(f: &mut Frame, area: Rect, app: &App) {
         render_customize(f, area, draft);
         return;
     }
-    let cols =
-        Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).split(area);
+    let (list_area, preview_area) = list_and_preview(area, 42);
 
     // Left: filter + list.
-    let left = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(cols[0]);
-    let filter_line = if app.mode == Mode::Filter || !app.filter.is_empty() {
-        Line::from(vec![
-            Span::styled(" / ", Style::default().fg(ACCENT)),
-            Span::raw(app.filter.clone()),
-            if app.mode == Mode::Filter {
-                Span::styled("▏", Style::default().fg(ACCENT))
-            } else {
-                Span::raw("")
-            },
-        ])
+    let left = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(list_area);
+    f.render_widget(
+        Paragraph::new(filter_line(&app.filter, app.mode == Mode::Filter, "themes")),
+        left[0],
+    );
+
+    let empty_message = if !app.filtered.is_empty() {
+        None
+    } else if app.themes.is_empty() {
+        Some("No themes found.\n\nCheck that Ghostty is installed, or press i to import a .itermcolors file.".to_string())
     } else {
-        Line::from(Span::styled(
-            " press / to filter themes",
-            Style::default().fg(MUTED),
+        Some(format!(
+            "No themes match “{}”.\n\nPress / and Backspace to widen the filter.",
+            app.filter
         ))
     };
-    f.render_widget(Paragraph::new(filter_line), left[0]);
+    let empty = |text: String| {
+        Paragraph::new(text)
+            .fg(MUTED)
+            .block(style::plain_panel())
+            .wrap(Wrap { trim: true })
+    };
 
+    // With no room for a preview pane, the message replaces the list.
+    if let (Some(text), None) = (&empty_message, preview_area) {
+        f.render_widget(empty(text.clone()), left[1]);
+        return;
+    }
+
+    let active = app.active_theme_names();
+    // Row = cursor (2) + active marker (2) + name + gap (1) + swatches (6) + tag (6).
+    let name_width = (left[1].width as usize).saturating_sub(2 + 17).clamp(8, 40);
     let items: Vec<ListItem> = app
         .filtered
         .iter()
         .filter_map(|&i| app.themes.ordered.get(i))
-        .map(theme_list_item)
+        .map(|theme| theme_list_item(theme, active.contains(&theme.name), name_width))
         .collect();
 
-    let count = format!(" themes ({}) ", app.filtered.len());
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(MUTED))
-                .title(count),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(0x2a, 0x2b, 0x3c))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+        .block(style::panel(style::list_title(
+            "themes",
+            app.theme_selected,
+            app.filtered.len(),
+        )))
+        .highlight_style(style::selection())
+        .highlight_symbol(CURSOR);
     let mut state = ListState::default();
     if !app.filtered.is_empty() {
         state.select(Some(app.theme_selected));
     }
     f.render_stateful_widget(list, left[1], &mut state);
+    style::scrollbar(f, left[1], app.filtered.len(), app.theme_selected);
 
-    // Right: live preview.
-    match app.current_theme() {
-        Some(theme) => preview::render(f, cols[1], theme),
-        None => {
-            let p = Paragraph::new("No themes found.\n\nCheck that Ghostty is installed, or press i to import a .itermcolors file.")
-                .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(MUTED)))
-                .wrap(Wrap { trim: true });
-            f.render_widget(p, cols[1]);
-        }
+    // Right (or below): live preview.
+    let Some(preview_area) = preview_area else {
+        return;
+    };
+    match (app.current_theme(), empty_message) {
+        (Some(theme), _) => preview::render(f, preview_area, theme),
+        (None, message) => f.render_widget(empty(message.unwrap_or_default()), preview_area),
     }
 }
 
 fn render_customize(f: &mut Frame, area: Rect, draft: &crate::customize::Draft) {
-    let cols =
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
+    let (controls, preview_area) = list_and_preview(area, 45);
+    if let Some(preview_area) = preview_area {
+        preview::render(f, preview_area, &draft.preview());
+    }
     if let Some(picker) = &draft.picker {
-        color_picker::render(f, cols[0], draft, picker);
-        preview::render(f, cols[1], &draft.preview());
+        color_picker::render(f, controls, draft, picker);
         return;
     }
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(cols[0]);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(controls);
     let items: Vec<ListItem> = (0..crate::customize::COLOR_COUNT)
         .map(|index| {
             let value = draft.value(index);
@@ -187,42 +247,53 @@ fn render_customize(f: &mut Frame, area: Rect, draft: &crate::customize::Draft) 
                     "  ",
                     swatch.map(|c| Style::default().bg(c)).unwrap_or_default(),
                 ),
-                Span::raw(format!(
-                    " {}: {}",
-                    crate::customize::label(index),
-                    if value.is_empty() { "default" } else { &value }
-                )),
+                Span::raw(format!(" {:<22}", crate::customize::label(index))),
+                if value.is_empty() {
+                    Span::styled("default", Style::default().fg(MUTED))
+                } else {
+                    Span::styled(value, Style::default().fg(TEXT))
+                },
             ]))
         })
         .collect();
+    let title = Line::from(if draft.dirty() {
+        vec![
+            Span::raw(" custom colors "),
+            Span::styled("● unsaved ", Style::default().fg(YELLOW)),
+        ]
+    } else {
+        vec![Span::raw(" custom colors ")]
+    });
     let mut state = ListState::default().with_selected(Some(draft.selected));
     f.render_stateful_widget(
         List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(if draft.dirty() {
-                        " custom colors • unsaved "
-                    } else {
-                        " custom colors "
-                    }),
-            )
-            .highlight_style(Style::default().fg(ACCENT).bold())
-            .highlight_symbol("› "),
+            .block(style::panel(title))
+            .highlight_style(style::selection())
+            .highlight_symbol(CURSOR),
         rows[0],
         &mut state,
     );
-    f.render_widget(Paragraph::new("↑↓ move · Enter hex · p color picker\nr reset color · s save copy · Esc back\nHex preview; other values are preserved.").fg(MUTED), rows[1]);
-    preview::render(f, cols[1], &draft.preview());
+    style::scrollbar(f, rows[0], crate::customize::COLOR_COUNT, draft.selected);
+    f.render_widget(
+        Paragraph::new(" Hex colors preview live; other values are preserved.").fg(MUTED),
+        rows[1],
+    );
 }
 
-fn theme_list_item(theme: &Theme) -> ListItem<'static> {
-    let mut spans = vec![Span::raw(format!("{:<28}", truncate(&theme.name, 28)))];
+fn theme_list_item(theme: &Theme, active: bool, name_width: usize) -> ListItem<'static> {
+    let mut spans = vec![
+        Span::styled(if active { "● " } else { "  " }, Style::default().fg(GREEN)),
+        Span::raw(format!(
+            "{:<name_width$} ",
+            truncate(&theme.name, name_width)
+        )),
+    ];
     // mini swatch strip
     for i in [1usize, 2, 4, 5, 6, 3] {
-        if let Some(c) = theme.palette[i] {
-            spans.push(Span::styled(" ", Style::default().bg(c.to_ratatui())));
-        }
+        spans.push(match theme.palette[i] {
+            Some(c) => Span::styled(" ", Style::default().bg(c.to_ratatui())),
+            None => Span::raw(" "),
+        });
     }
     if theme.source == hauntty::theme::ThemeSource::User {
         spans.push(Span::styled("  user", Style::default().fg(MUTED)));
@@ -231,8 +302,9 @@ fn theme_list_item(theme: &Theme) -> ListItem<'static> {
 }
 
 fn render_settings(f: &mut Frame, area: Rect, app: &App) {
-    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
+    let rows = Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).split(area);
 
+    let mut changed = 0;
     let items: Vec<ListItem> = app
         .settings
         .iter()
@@ -251,77 +323,78 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
                 Widget::Stepper { .. } => format!("– {value} +"),
                 Widget::Text => value.clone(),
             };
-            let value_style = if is_default {
-                Style::default().fg(MUTED)
+            if !is_default {
+                changed += 1;
+            }
+            let (marker, value_style, suffix) = if is_default {
+                ("  ", Style::default().fg(MUTED), "  (default)")
             } else {
-                Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a))
+                ("● ", Style::default().fg(GREEN), "")
             };
-            let suffix = if is_default { "  (default)" } else { "" };
             ListItem::new(Line::from(vec![
-                Span::raw(format!("  {:<24}", spec.label)),
+                Span::styled(marker, Style::default().fg(GREEN)),
+                Span::raw(format!("{:<24}", spec.label)),
                 Span::styled(format!("{:<18}", widget_hint), value_style),
                 Span::styled(suffix, Style::default().fg(MUTED)),
             ]))
         })
         .collect();
 
+    let mut title = vec![Span::raw(style::list_title(
+        "settings",
+        app.setting_selected,
+        app.settings.len(),
+    ))];
+    if changed > 0 {
+        title.push(Span::styled(
+            format!("● {changed} set "),
+            Style::default().fg(GREEN),
+        ));
+    }
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(MUTED))
-                .title(" settings "),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(0x2a, 0x2b, 0x3c))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+        .block(style::panel(Line::from(title)))
+        .highlight_style(style::selection())
+        .highlight_symbol(CURSOR);
     let mut state = ListState::default();
     state.select(Some(app.setting_selected));
     f.render_stateful_widget(list, rows[0], &mut state);
+    style::scrollbar(f, rows[0], app.settings.len(), app.setting_selected);
 
-    // Help text for the selected setting.
-    let help = app
-        .settings
-        .get(app.setting_selected)
-        .map(|s| s.help)
-        .unwrap_or("");
+    // Help text for the selected setting, titled with its config key.
+    let selected = app.settings.get(app.setting_selected);
     f.render_widget(
-        Paragraph::new(help)
+        Paragraph::new(selected.map(|s| s.help).unwrap_or(""))
             .style(Style::default().fg(MUTED))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(MUTED)),
-            )
+            .block(style::panel(
+                selected.map(|s| format!(" {} ", s.key)).unwrap_or_default(),
+            ))
             .wrap(Wrap { trim: true }),
         rows[1],
     );
 }
 
-fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
-    let keys: &[(&str, &str)] = match (app.tab, &app.mode) {
-        (_, Mode::Filter) => &[("type", "filter"), ("↵/esc", "done")],
-        (_, Mode::Confirm) => &[("y", "apply"), ("e", "edit name"), ("n/esc", "cancel")],
-        (_, Mode::Input) => &[("type", "value"), ("↵", "set"), ("esc", "cancel")],
-        (_, Mode::ToolInstall) => &[("y", "install"), ("n/esc", "cancel"), ("↑↓", "scroll")],
-        (_, Mode::Customize)
-            if app
-                .customize
-                .as_ref()
-                .is_some_and(|draft| draft.picker.is_some()) =>
-        {
-            &[
-                ("↑↓", "control"),
-                ("←/→", "Down/Up"),
-                ("1/2/3", "step"),
-                ("↵", "keep"),
-                ("esc", "cancel"),
-            ]
-        }
-        (_, Mode::Customize) => &[
+type Hint = (&'static str, &'static str);
+
+/// Key hints for the current tab and mode, most useful first.
+fn hints(app: &App) -> Vec<Hint> {
+    let picking = app
+        .customize
+        .as_ref()
+        .is_some_and(|draft| draft.picker.is_some());
+    let mut keys: Vec<Hint> = match (app.tab, &app.mode) {
+        (_, Mode::Filter) => vec![("type", "filter"), ("↑↓", "move"), ("↵/esc", "done")],
+        (_, Mode::Confirm) => vec![("y", "apply"), ("e", "edit name"), ("n/esc", "cancel")],
+        (_, Mode::Input) => vec![("type", "value"), ("↵", "set"), ("esc", "cancel")],
+        (_, Mode::ToolInstall) => vec![("y", "install"), ("n/esc", "cancel"), ("↑↓", "scroll")],
+        (_, Mode::Customize) if picking => vec![
+            ("↑↓", "control"),
+            ("←/→", "Down/Up"),
+            ("1/2/3", "step"),
+            ("r", "reset"),
+            ("↵", "keep"),
+            ("esc", "cancel"),
+        ],
+        (_, Mode::Customize) => vec![
             ("↑↓", "move"),
             ("↵", "hex"),
             ("p", "picker"),
@@ -329,18 +402,48 @@ fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
             ("s", "save copy"),
             ("esc", "back"),
         ],
-        (_, Mode::Help) => &[("esc", "close")],
+        (_, Mode::Help) => vec![("esc", "close")],
         #[cfg(feature = "online")]
-        (_, Mode::Fetch) => &[
+        (_, Mode::Fetch) => vec![
             ("↑↓", "move"),
             ("type", "filter"),
             ("↵", "download"),
             ("esc", "close"),
         ],
-        (Tab::Themes, _) => THEME_KEYS,
-        (Tab::Settings, _) => SETTINGS_KEYS,
-        (Tab::Starship, _) => STARSHIP_KEYS,
-        (Tab::Tools, _) => &[
+        (Tab::Themes, _) => {
+            let mut keys = vec![
+                ("↑↓", "move"),
+                ("/", "filter"),
+                ("↵", "apply"),
+                ("c", "customize"),
+            ];
+            if cfg!(feature = "import-iterm") {
+                keys.push(("i", "import"));
+            }
+            if cfg!(feature = "online") {
+                keys.push(("f", "fetch"));
+            }
+            keys
+        }
+        (Tab::Settings, _) => vec![
+            ("↑↓", "move"),
+            ("←→", "change"),
+            ("↵", "edit/toggle"),
+            ("s", "save"),
+        ],
+        (Tab::Starship, _) => {
+            let mut keys = vec![
+                ("↑↓", "move"),
+                ("/", "filter"),
+                ("↵", "apply preset"),
+                ("i", "install"),
+            ];
+            if cfg!(feature = "online") {
+                keys.push(("f", "fetch"));
+            }
+            keys
+        }
+        (Tab::Tools, _) => vec![
             ("↑↓", "move"),
             ("i/↵", "install"),
             ("r", "refresh"),
@@ -348,8 +451,41 @@ fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
             ("PgUp/Dn", "details"),
         ],
     };
+    if app.mode == Mode::Normal {
+        keys.extend([("tab", "next tab"), ("?", "help"), ("q", "quit")]);
+    }
+    keys
+}
+
+fn hint_width((key, label): Hint) -> usize {
+    Span::raw(key).width() + Span::raw(label).width() + 5
+}
+
+/// The hints that fit in `width`, in order. When some must go, `? help` stays
+/// so the rest are always one key away.
+fn fit_hints(keys: Vec<Hint>, width: usize) -> Vec<Hint> {
+    // The last hint's trailing padding may run off the edge.
+    let total: usize = keys.iter().copied().map(hint_width).sum();
+    if total <= width + 2 {
+        return keys;
+    }
+    let help = keys.iter().copied().find(|(key, _)| *key == "?");
+    let mut room = width.saturating_sub(help.map(hint_width).unwrap_or(0)) + 2;
+    let mut shown = Vec::new();
+    for hint in keys.into_iter().filter(|(key, _)| *key != "?") {
+        if hint_width(hint) > room {
+            break;
+        }
+        room -= hint_width(hint);
+        shown.push(hint);
+    }
+    shown.extend(help);
+    shown
+}
+
+fn render_help_bar(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = Vec::new();
-    for (k, label) in keys {
+    for (k, label) in fit_hints(hints(app), area.width as usize) {
         spans.push(Span::styled(
             format!(" {k} "),
             Style::default().fg(Color::Black).bg(MUTED),
@@ -368,14 +504,11 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
     let status = &app.starship_status;
     let status_span = if status.installed {
         let ver = status.version.as_deref().unwrap_or("installed");
-        Span::styled(
-            format!("✓ {ver}"),
-            Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)).bold(),
-        )
+        Span::styled(format!("✓ {ver}"), Style::default().fg(GREEN).bold())
     } else {
         Span::styled(
             "✗ Not Installed (press i to install)",
-            Style::default().fg(Color::Rgb(0xf7, 0x76, 0x8e)).bold(),
+            Style::default().fg(RED).bold(),
         )
     };
 
@@ -400,68 +533,58 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
             ),
         ]),
     ];
-
-    let banner = Paragraph::new(banner_text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(MUTED))
-            .title(" Starship Prompt Status & Links "),
+    f.render_widget(
+        Paragraph::new(banner_text).block(style::panel(" Starship Prompt Status & Links ")),
+        chunks[0],
     );
-    f.render_widget(banner, chunks[0]);
 
-    let cols = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(chunks[1]);
-
-    let left = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(cols[0]);
-    let filter_line = if app.mode == Mode::Filter || !app.starship_filter.is_empty() {
-        Line::from(vec![
-            Span::styled(" / ", Style::default().fg(ACCENT)),
-            Span::raw(app.starship_filter.clone()),
-            if app.mode == Mode::Filter {
-                Span::styled("▏", Style::default().fg(ACCENT))
-            } else {
-                Span::raw("")
-            },
-        ])
+    let (list_area, detail_area) = if chunks[1].width >= SIDE_BY_SIDE_MIN_WIDTH {
+        let cols = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(chunks[1]);
+        (cols[0], cols[1])
     } else {
-        Line::from(Span::styled(
-            " press / to filter presets",
-            Style::default().fg(MUTED),
-        ))
+        let rows = Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(chunks[1]);
+        (rows[0], rows[1])
     };
-    f.render_widget(Paragraph::new(filter_line), left[0]);
 
+    let left = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(list_area);
+    f.render_widget(
+        Paragraph::new(filter_line(
+            &app.starship_filter,
+            app.mode == Mode::Filter,
+            "presets",
+        )),
+        left[0],
+    );
+
+    let name_width = (left[1].width as usize).saturating_sub(4).max(8);
     let items: Vec<ListItem> = app
         .starship_filtered
         .iter()
         .filter_map(|&i| app.starship_presets.get(i))
-        .map(|p| {
-            ListItem::new(Line::from(vec![Span::styled(
-                format!("{:<24}", truncate(&p.name, 24)),
-                Style::default().bold(),
-            )]))
-        })
+        .map(|p| ListItem::new(truncate(&p.name, name_width)))
         .collect();
 
-    let count = format!(" presets ({}) ", app.starship_filtered.len());
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(MUTED))
-                .title(count),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(0x2a, 0x2b, 0x3c))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+        .block(style::panel(style::list_title(
+            "presets",
+            app.starship_selected,
+            app.starship_filtered.len(),
+        )))
+        .highlight_style(style::selection())
+        .highlight_symbol(CURSOR);
     let mut state = ListState::default();
     if !app.starship_filtered.is_empty() {
         state.select(Some(app.starship_selected));
     }
     f.render_stateful_widget(list, left[1], &mut state);
+    style::scrollbar(
+        f,
+        left[1],
+        app.starship_filtered.len(),
+        app.starship_selected,
+    );
 
     match app.current_starship_preset() {
         Some(preset) => {
@@ -470,7 +593,7 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
                 Constraint::Length(4),
                 Constraint::Min(0),
             ])
-            .split(cols[1]);
+            .split(detail_area);
 
             let overview = Paragraph::new(vec![
                 Line::from(Span::styled(
@@ -482,90 +605,34 @@ fn render_starship(f: &mut Frame, area: Rect, app: &App) {
                     Style::default().fg(MUTED),
                 )),
             ])
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(MUTED))
-                    .title(" Preset Description "),
-            )
+            .block(style::panel(" Preset Description "))
             .wrap(Wrap { trim: true });
             f.render_widget(overview, right_rows[0]);
 
-            let preview_p = Paragraph::new(vec![Line::from(Span::styled(
+            let preview_p = Paragraph::new(Span::styled(
                 preset.preview.as_ref(),
-                Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)).bold(),
-            ))])
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(ACCENT))
-                    .title(" Prompt Preview "),
-            );
+                Style::default().fg(GREEN).bold(),
+            ))
+            .block(style::overlay(" Prompt Preview "));
             f.render_widget(preview_p, right_rows[1]);
 
             let toml_p = Paragraph::new(preset.toml_content.as_ref())
-                .style(Style::default().fg(Color::Rgb(0xc0, 0xca, 0xf5)))
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(MUTED))
-                        .title(" TOML Config (~/.config/starship.toml) "),
-                )
+                .style(Style::default().fg(TEXT))
+                .block(style::panel(" TOML Config (~/.config/starship.toml) "))
                 .wrap(Wrap { trim: false });
             f.render_widget(toml_p, right_rows[2]);
         }
         None => {
-            let p = Paragraph::new("No Starship presets match your filter.").block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(MUTED)),
-            );
-            f.render_widget(p, cols[1]);
+            let p = Paragraph::new(format!(
+                "No Starship presets match “{}”.",
+                app.starship_filter
+            ))
+            .fg(MUTED)
+            .block(style::plain_panel());
+            f.render_widget(p, detail_area);
         }
     }
 }
-
-#[cfg(feature = "online")]
-const THEME_KEYS: &[(&str, &str)] = &[
-    ("c", "customize"),
-    ("↑↓", "move"),
-    ("/", "filter"),
-    ("↵", "apply"),
-    ("tab", "settings"),
-    ("i", "import"),
-    ("f", "fetch"),
-    ("?", "help"),
-    ("q", "quit"),
-];
-#[cfg(not(feature = "online"))]
-const THEME_KEYS: &[(&str, &str)] = &[
-    ("c", "customize"),
-    ("↑↓", "move"),
-    ("/", "filter"),
-    ("↵", "apply"),
-    ("tab", "settings"),
-    ("i", "import"),
-    ("?", "help"),
-    ("q", "quit"),
-];
-
-const SETTINGS_KEYS: &[(&str, &str)] = &[
-    ("↑↓", "move"),
-    ("←→", "change"),
-    ("↵", "edit/toggle"),
-    ("s", "save"),
-    ("tab", "starship"),
-    ("q", "quit"),
-];
-
-const STARSHIP_KEYS: &[(&str, &str)] = &[
-    ("↑↓", "move"),
-    ("/", "filter"),
-    ("↵", "apply preset"),
-    ("i", "install"),
-    ("tab", "tools"),
-    ("q", "quit"),
-];
 
 fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     let Some(c) = &app.confirm else { return };
@@ -575,7 +642,7 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(
             format!("Apply theme “{}”?", c.theme_name),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).bold(),
         )),
         Line::from(""),
     ];
@@ -589,14 +656,11 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(MUTED),
         )));
         let name_span = if c.editing_name {
-            Span::styled(
-                format!("  {}▏", c.backup_name),
-                Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)),
-            )
+            Span::styled(format!("  {}▏", c.backup_name), Style::default().fg(GREEN))
         } else {
             Span::styled(
                 format!("  {}   (press e to rename)", c.backup_name),
-                Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)),
+                Style::default().fg(GREEN),
             )
         };
         lines.push(Line::from(name_span));
@@ -608,12 +672,7 @@ fn render_confirm(f: &mut Frame, area: Rect, app: &App) {
     )));
 
     let p = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .title(" confirm "),
-        )
+        .block(style::overlay(" confirm "))
         .wrap(Wrap { trim: true });
     f.render_widget(p, rect);
 }
@@ -627,10 +686,7 @@ fn render_input(f: &mut Frame, area: Rect, app: &App) {
     }
     let rect = center(area, 76, 7);
     f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(" input ");
+    let block = style::overlay(" input ");
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let rows = Layout::vertical([
@@ -671,10 +727,7 @@ fn render_input(f: &mut Frame, area: Rect, app: &App) {
 fn render_import_browser(f: &mut Frame, area: Rect, browser: &crate::import_path::Browser) {
     let rect = center(area, 76, 20);
     f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
-        .title(" browse .itermcolors ");
+    let block = style::overlay(" browse .itermcolors ");
     let inner = block.inner(rect);
     f.render_widget(block, rect);
     let rows = Layout::vertical([
@@ -715,8 +768,8 @@ fn render_import_browser(f: &mut Frame, area: Rect, browser: &crate::import_path
         let mut state = ListState::default().with_selected(Some(browser.selected));
         f.render_stateful_widget(
             List::new(entries)
-                .highlight_symbol("› ")
-                .highlight_style(Style::default().fg(ACCENT).bold()),
+                .highlight_symbol(CURSOR)
+                .highlight_style(style::selection()),
             rows[1],
             &mut state,
         );
@@ -727,38 +780,67 @@ fn render_import_browser(f: &mut Frame, area: Rect, browser: &crate::import_path
     );
 }
 
-#[cfg(feature = "online")]
-const GLOBAL_KEYS_HELP: &str = "Tab / 1-4 switches panes · u checks for a newer release · q quits";
-#[cfg(not(feature = "online"))]
-const GLOBAL_KEYS_HELP: &str = "Tab / 1-4 switches panes · q quits";
-
 fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let rect = center(area, 70, 20);
-    f.render_widget(Clear, rect);
+    let mut themes = "/ filter · Enter apply · c customize".to_string();
+    let mut starship = "/ filter · Enter apply preset · i install".to_string();
+    if cfg!(feature = "import-iterm") {
+        themes.push_str(" · i import");
+    }
+    if cfg!(feature = "online") {
+        themes.push_str(" · f fetch");
+        starship.push_str(" · f fetch");
+    }
+    let sections: [(&str, &str); 7] = [
+        (
+            "Global",
+            if cfg!(feature = "online") {
+                "Tab/Shift-Tab switch tab · 1-4 jump · u check for update · ? help · q quit"
+            } else {
+                "Tab/Shift-Tab switch tab · 1-4 jump · ? help · q quit"
+            },
+        ),
+        ("Lists", "↑↓ or j/k move · g/G first/last · PgUp/PgDn page"),
+        ("Themes", &themes),
+        (
+            "Customize",
+            "Enter hex · p picker · r reset · s save copy · Esc back",
+        ),
+        ("Settings", "←→ change · Enter edit/toggle · s save"),
+        ("Starship", &starship),
+        (
+            "Tools",
+            "Enter review install · r refresh · b Homebrew · PgUp/PgDn details",
+        ),
+    ];
+
     let mut lines = vec![
         Line::from(Span::styled(
             "hauntty — Ghostty theme & settings manager",
             Style::default().fg(ACCENT).bold(),
         )),
         Line::from(""),
-        Line::from("Themes tab:   ↑↓ move · / filter · Enter apply · i import .itermcolors"),
-        Line::from("Customize: c on a theme · Enter edit color · r reset · s save copy"),
-        Line::from("Settings tab: ↑↓ move · ←→ change · Enter edit/toggle · s save"),
-        Line::from("Starship tab: ↑↓ move · / filter · Enter apply preset · i install · f fetch"),
-        Line::from("Tools tab: ↑↓ move · Enter install · r refresh · b set up Homebrew"),
-        Line::from(GLOBAL_KEYS_HELP),
-        Line::from(""),
-        Line::from(Span::styled(
-            "After applying Ghostty settings, reload with ⌘⇧, (cmd+shift+,)",
-            Style::default().fg(Color::Rgb(0x9e, 0xce, 0x6a)),
-        )),
     ];
+    for (name, keys) in sections {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{name:<11}"), Style::default().fg(ACCENT)),
+            Span::raw(keys.to_string()),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "● marks the theme your config uses, and settings you have changed.",
+        Style::default().fg(MUTED),
+    )));
+    lines.push(Line::from(Span::styled(
+        "After applying Ghostty settings, reload with ⌘⇧, (cmd+shift+,)",
+        Style::default().fg(GREEN),
+    )));
 
     if !app.warnings.is_empty() {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Warnings:",
-            Style::default().fg(Color::Rgb(0xe0, 0xaf, 0x68)),
+            Style::default().fg(YELLOW),
         )));
         for w in &app.warnings {
             lines.push(Line::from(Span::styled(
@@ -767,13 +849,12 @@ fn render_help_overlay(f: &mut Frame, area: Rect, app: &App) {
             )));
         }
     }
+    // Tall enough for every line, with slack for warnings that wrap.
+    let height = lines.len() as u16 + 2 + 2 * app.warnings.len() as u16;
+    let rect = center(area, 82, height);
+    f.render_widget(Clear, rect);
     let p = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .title(" help "),
-        )
+        .block(style::overlay(" help ").padding(ratatui::widgets::Padding::horizontal(1)))
         .wrap(Wrap { trim: true });
     f.render_widget(p, rect);
 }
@@ -797,12 +878,7 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
             Line::from(""),
             Line::from(Span::styled("   esc to cancel", Style::default().fg(MUTED))),
         ])
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .title(" fetch items "),
-        );
+        .block(style::overlay(" fetch items "));
         f.render_widget(p, rect);
         return;
     };
@@ -823,12 +899,7 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
             Span::raw(fetch.filter.clone()),
             Span::styled("▏", Style::default().fg(ACCENT)),
         ]))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(ACCENT))
-                .title(title),
-        ),
+        .block(style::overlay(title)),
         rect,
     );
 
@@ -848,12 +919,8 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(0x2a, 0x2b, 0x3c))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+        .highlight_style(style::selection())
+        .highlight_symbol(CURSOR);
     let list_area = Rect {
         x: rect.x + 1,
         y: rect.y + 2,
@@ -870,8 +937,8 @@ fn render_fetch(f: &mut Frame, area: Rect, app: &App) {
 fn render_toast(f: &mut Frame, area: Rect, toast: &crate::app::Toast) {
     let (color, tag) = match toast.kind {
         ToastKind::Info => (MUTED, "·"),
-        ToastKind::Success => (Color::Rgb(0x9e, 0xce, 0x6a), "✓"),
-        ToastKind::Error => (Color::Rgb(0xf7, 0x76, 0x8e), "✗"),
+        ToastKind::Success => (GREEN, "✓"),
+        ToastKind::Error => (RED, "✗"),
     };
     // A message wider than the terminal wraps, and the box grows with it (up
     // to a few rows) instead of clipping the overflow: a release URL or an
@@ -914,11 +981,7 @@ fn render_toast(f: &mut Frame, area: Rect, toast: &crate::app::Toast) {
     f.render_widget(
         Paragraph::new(lines)
             .style(Style::default().fg(color))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(color)),
-            ),
+            .block(style::plain_panel().border_style(Style::default().fg(color))),
         rect,
     );
 }

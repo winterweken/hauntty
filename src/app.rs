@@ -268,12 +268,42 @@ impl App {
             .and_then(|&i| self.themes.ordered.get(i))
     }
 
+    /// Theme names the config currently selects. Ghostty's last `theme =`
+    /// line wins; a `dark:A,light:B` pair names two themes.
+    pub fn active_theme_names(&self) -> Vec<String> {
+        let Some(value) =
+            self.config
+                .indices_of("theme")
+                .last()
+                .and_then(|&i| match &self.config.lines[i] {
+                    hauntty::config::Line::KeyValue(kv) => Some(strip_quotes(&kv.value)),
+                    _ => None,
+                })
+        else {
+            return Vec::new();
+        };
+        value
+            .split(',')
+            .map(|part| {
+                let part = part.trim();
+                part.strip_prefix("dark:")
+                    .or_else(|| part.strip_prefix("light:"))
+                    .unwrap_or(part)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
     pub fn move_theme(&mut self, delta: i32) {
         if self.filtered.is_empty() {
             return;
         }
         let len = self.filtered.len() as i32;
-        let next = (self.theme_selected as i32 + delta).clamp(0, len - 1);
+        let next = (self.theme_selected as i32)
+            .saturating_add(delta)
+            .clamp(0, len - 1);
         self.theme_selected = next as usize;
     }
 
@@ -282,7 +312,9 @@ impl App {
             return;
         }
         let len = self.settings.len() as i32;
-        let next = (self.setting_selected as i32 + delta).clamp(0, len - 1);
+        let next = (self.setting_selected as i32)
+            .saturating_add(delta)
+            .clamp(0, len - 1);
         self.setting_selected = next as usize;
     }
 
@@ -810,7 +842,9 @@ impl App {
             return;
         }
         let len = self.starship_filtered.len() as i32;
-        let next = (self.starship_selected as i32 + delta).clamp(0, len - 1);
+        let next = (self.starship_selected as i32)
+            .saturating_add(delta)
+            .clamp(0, len - 1);
         self.starship_selected = next as usize;
     }
 

@@ -3,12 +3,12 @@
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use hauntty::theme::Rgb;
 
-use super::{ACCENT, MUTED};
+use super::style::{self, ACCENT, CURSOR, MUTED};
 use crate::customize::{label, ColorPicker, Draft, PICKER_CONTROLS, PICKER_STEPS};
 
 fn chip(text: String, color: Rgb) -> Span<'static> {
@@ -21,9 +21,7 @@ fn chip(text: String, color: Rgb) -> Span<'static> {
 }
 
 pub fn render(f: &mut Frame, area: Rect, draft: &Draft, picker: &ColorPicker) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} · color picker ", label(draft.selected)));
+    let block = style::overlay(format!(" {} · color picker ", label(draft.selected)));
     let inner = block.inner(area);
     f.render_widget(block, area);
     let rows = Layout::vertical([
@@ -127,7 +125,7 @@ pub fn render(f: &mut Frame, area: Rect, draft: &Draft, picker: &ColorPicker) {
     let mut state = ListState::default().with_selected(Some(picker.control));
     f.render_stateful_widget(
         List::new(items)
-            .highlight_symbol("› ")
+            .highlight_symbol(CURSOR)
             .highlight_style(Style::default().fg(ACCENT).bold()),
         rows[1],
         &mut state,

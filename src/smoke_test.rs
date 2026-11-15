@@ -198,3 +198,158 @@ fn renders_and_handles_input_without_panicking() {
         assert!(!app.fetching, "cancel should stop the fetching state");
     }
 }
+
+/// A throwaway app whose theme list is filtered down to three fixture themes
+/// (the host's real Ghostty themes are also discovered, so tests must not
+/// assume the list holds only these). `theme_line` is the config's
+/// `theme = …` value.
+fn fixture(tag: &str, theme_line: &str) -> (TempDir, App) {
+    let path = std::env::temp_dir().join(format!("hauntty-ui-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    let dir = TempDir(path);
+    let cfg = dir.0.join("config");
+    std::fs::write(&cfg, format!("theme = {theme_line}\n")).unwrap();
+    let themes = dir.0.join("bundled");
+    std::fs::create_dir_all(&themes).unwrap();
+    for name in ["HaunttyFixA", "HaunttyFixB", "HaunttyFixC"] {
+        std::fs::write(
+            themes.join(name),
+            "palette = 0=#21222c\npalette = 4=#bd93f9\nbackground = #282a36\nforeground = #f8f8f2\n",
+        )
+        .unwrap();
+    }
+    let mut app = App::new(Paths::resolve(Some(cfg), Some(themes))).unwrap();
+    app.filter = "HaunttyFix".into();
+    app.recompute_filter();
+    assert_eq!(app.filtered.len(), 3);
+    (dir, app)
+}
+
+/// Render at the given size and return each row as plain text.
+fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui::render(f, app)).unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn active_theme_is_marked_in_the_list() {
+    let (_dir, app) = fixture("active", "HaunttyFixB");
+    assert_eq!(app.active_theme_names(), vec!["HaunttyFixB".to_string()]);
+    let rows = screen(&app, 120, 30);
+    let list_half = |name: &str| -> String {
+        rows.iter()
+            .map(|r| r.chars().take(50).collect::<String>())
+            .find(|r| r.contains(name))
+            .unwrap_or_else(|| panic!("{name} not listed"))
+    };
+    assert!(list_half("HaunttyFixB").contains('●'));
+    assert!(!list_half("HaunttyFixC").contains('●'));
+}
+
+#[test]
+fn active_theme_names_understand_light_dark_pairs() {
+    let (_dir, app) = fixture("pair", "\"dark:HaunttyFixB,light:HaunttyFixA\"");
+    assert_eq!(
+        app.active_theme_names(),
+        vec!["HaunttyFixB".to_string(), "HaunttyFixA".to_string()]
+    );
+}
+
+#[test]
+fn help_bar_keeps_the_help_hint_on_narrow_terminals() {
+    let (_dir, mut app) = fixture("helpbar", "HaunttyFixB");
+    for tab in [Tab::Themes, Tab::Settings, Tab::Starship, Tab::Tools] {
+        app.tab = tab;
+        for width in [120, 60, 44] {
+            let rows = screen(&app, width, 24);
+            let bar = rows.last().unwrap();
+            assert!(
+                bar.contains("? ") && bar.contains("help"),
+                "{tab:?} at {width} columns: {bar:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn jump_keys_work_on_every_list() {
+    let (_dir, mut app) = fixture("jump", "HaunttyFixB");
+    handle_key(&mut app, key(KeyCode::Char('G')));
+    assert_eq!(app.theme_selected, 2);
+    // End from a non-zero row must not overflow back to the top.
+    handle_key(&mut app, key(KeyCode::Up));
+    handle_key(&mut app, key(KeyCode::End));
+    assert_eq!(app.theme_selected, 2);
+    handle_key(&mut app, key(KeyCode::Char('g')));
+    assert_eq!(app.theme_selected, 0);
+
+    app.tab = Tab::Settings;
+    handle_key(&mut app, key(KeyCode::End));
+    assert_eq!(app.setting_selected, app.settings.len() - 1);
+    handle_key(&mut app, key(KeyCode::PageUp));
+    assert!(app.setting_selected < app.settings.len() - 1);
+    handle_key(&mut app, key(KeyCode::Char('g')));
+    assert_eq!(app.setting_selected, 0);
+
+    app.tab = Tab::Starship;
+    handle_key(&mut app, key(KeyCode::Char('G')));
+    assert_eq!(app.starship_selected, app.starship_filtered.len() - 1);
+
+    app.tab = Tab::Tools;
+    handle_key(&mut app, key(KeyCode::End));
+    assert_eq!(app.tools.selected, hauntty::tools::CATALOG.len() - 1);
+    handle_key(&mut app, key(KeyCode::Home));
+    assert_eq!(app.tools.selected, 0);
+}
+
+#[test]
+fn an_empty_filter_result_says_so_instead_of_blaming_the_install() {
+    let (_dir, mut app) = fixture("nomatch", "HaunttyFixB");
+    app.filter = "qqqq".into();
+    app.recompute_filter();
+    let text = screen(&app, 120, 30).join("\n");
+    assert!(text.contains("No themes match"), "{text}");
+    assert!(!text.contains("Check that Ghostty is installed"));
+}
+
+#[test]
+fn narrow_terminals_keep_the_theme_list_readable() {
+    let (_dir, app) = fixture("narrow", "HaunttyFixB");
+    // Too narrow for side-by-side: the list takes the full width.
+    let rows = screen(&app, 50, 16);
+    let row = rows.iter().find(|r| r.contains("HaunttyFixC")).unwrap();
+    assert!(row.trim_end().chars().count() > 30, "{row:?}");
+    // Tall and narrow: the preview stacks underneath.
+    let text = screen(&app, 50, 40).join("\n");
+    assert!(text.contains("HaunttyFixC") && text.contains("cargo run"));
+}
+
+#[test]
+fn preview_reports_contrast() {
+    let (_dir, app) = fixture("contrast", "HaunttyFixB");
+    let text = screen(&app, 120, 30).join("\n");
+    assert!(text.contains("contrast"), "{text}");
+}
+
+#[test]
+fn every_screen_survives_tiny_terminals() {
+    let (_dir, mut app) = fixture("tiny", "HaunttyFixB");
+    for tab in [Tab::Themes, Tab::Settings, Tab::Starship, Tab::Tools] {
+        app.tab = tab;
+        for mode in [Mode::Normal, Mode::Help] {
+            app.mode = mode;
+            for (w, h) in [(200, 60), (80, 24), (40, 12), (12, 4), (3, 2), (1, 1)] {
+                screen(&app, w, h);
+            }
+        }
+    }
+}
