@@ -53,8 +53,8 @@ pub fn parse_itermcolors(reader: impl Read, name: &str, path: PathBuf) -> Result
     };
 
     let mut theme = Theme::empty(name, ThemeSource::User, path);
-    for i in 0..16 {
-        theme.palette[i] = color(&format!("Ansi {i} Color"));
+    for (i, slot) in theme.palette.iter_mut().enumerate() {
+        *slot = color(&format!("Ansi {i} Color"));
     }
     theme.background = color("Background Color");
     theme.foreground = color("Foreground Color");
